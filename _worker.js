@@ -16,6 +16,9 @@ export default {
         try {
             const url = new URL(request.url);
             
+            // 디버깅용 로그
+            console.log(`요청: ${request.method} ${url.pathname}`);
+            
             // CORS preflight 처리
             if (request.method === 'OPTIONS') {
                 return new Response(null, {
@@ -37,7 +40,7 @@ export default {
             // 정적 파일 서빙 (HTML, CSS, JS)
             return handleStaticFiles(request, env, url);
         } catch (error) {
-            console.error('Worker 오류:', error);
+            console.error('Worker 최상위 오류:', error);
             return new Response('Internal Server Error: ' + error.message, { 
                 status: 500,
                 headers: CORS_HEADERS
@@ -218,7 +221,7 @@ function cleanupInactiveClients() {
         for (const [clientId, client] of connectedClients) {
             if (now - client.lastSeen > inactiveThreshold) {
                 try {
-                    if (client.websocket && client.websocket.readyState === WebSocket.READY_STATE_OPEN) {
+                    if (client.websocket && client.websocket.readyState === 1) {
                         client.websocket.close();
                     }
                 } catch (error) {
@@ -278,8 +281,24 @@ async function handleAPI(request, env, url) {
                     status: 'healthy',
                     timestamp: new Date().toISOString(),
                     connectedClients: connectedClients.size,
-                    version: '1.0.0'
+                    version: '1.0.0',
+                    r2Bucket: env.STICKY_NOTES_BUCKET ? 'connected' : 'not_found'
                 }), {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...CORS_HEADERS
+                    }
+                });
+                
+            case '/debug':
+                // 디버깅용 엔드포인트
+                const debugInfo = {
+                    r2BucketStatus: env.STICKY_NOTES_BUCKET ? 'connected' : 'not_found',
+                    connectedClients: connectedClients.size,
+                    timestamp: new Date().toISOString()
+                };
+                
+                return new Response(JSON.stringify(debugInfo, null, 2), {
                     headers: {
                         'Content-Type': 'application/json',
                         ...CORS_HEADERS
@@ -327,19 +346,22 @@ async function handleAPI(request, env, url) {
 // R2에서 노트 로드
 async function loadNotesFromR2(env) {
     try {
-        // R2 버킷이 없는 경우 빈 배열 반환
         if (!env.STICKY_NOTES_BUCKET) {
-            console.warn('R2 버킷이 설정되지 않음');
+            console.warn('STICKY_NOTES_BUCKET이 설정되지 않음');
             return [];
         }
         
+        console.log('R2에서 notes.json 로딩 시도...');
         const notesObject = await env.STICKY_NOTES_BUCKET.get('notes.json');
         if (!notesObject) {
+            console.log('notes.json 파일이 존재하지 않음, 빈 배열 반환');
             return [];
         }
         
         const notesData = await notesObject.text();
-        return JSON.parse(notesData);
+        const notes = JSON.parse(notesData);
+        console.log(`R2에서 ${notes.length}개의 노트 로드됨`);
+        return notes;
     } catch (error) {
         console.error('R2에서 노트 로드 오류:', error);
         return [];
@@ -349,11 +371,12 @@ async function loadNotesFromR2(env) {
 // R2에 노트 저장
 async function saveNoteToR2(env, note) {
     try {
-        // R2 버킷이 없는 경우 에러 발생하지 않고 로그만 출력
         if (!env.STICKY_NOTES_BUCKET) {
-            console.warn('R2 버킷이 설정되지 않아 노트를 저장할 수 없습니다');
+            console.warn('STICKY_NOTES_BUCKET이 설정되지 않아 노트를 저장할 수 없습니다');
             return;
         }
+        
+        console.log('노트 저장 시작:', note.id);
         
         // 기존 노트들 로드
         const existingNotes = await loadNotesFromR2(env);
@@ -388,6 +411,8 @@ async function saveNoteToR2(env, note) {
             }
         );
         
+        console.log('노트 저장 완료:', note.id);
+        
     } catch (error) {
         console.error('R2에 노트 저장 오류:', error);
         // 에러가 발생해도 앱이 멈추지 않도록 처리
@@ -398,7 +423,7 @@ async function saveNoteToR2(env, note) {
 async function deleteNoteFromR2(env, noteId) {
     try {
         if (!env.STICKY_NOTES_BUCKET) {
-            console.warn('R2 버킷이 설정되지 않아 노트를 삭제할 수 없습니다');
+            console.warn('STICKY_NOTES_BUCKET이 설정되지 않아 노트를 삭제할 수 없습니다');
             return;
         }
         
@@ -432,12 +457,14 @@ async function handleStaticFiles(request, env, url) {
     const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
     
     try {
-        // R2에서 정적 파일 로드 시도 (R2 버킷이 있는 경우에만)
+        // R2에서 정적 파일 로드 시도
         if (env.STICKY_NOTES_BUCKET) {
             try {
+                console.log(`R2에서 파일 로딩 시도: static${pathname}`);
                 const object = await env.STICKY_NOTES_BUCKET.get(`static${pathname}`);
                 
                 if (object) {
+                    console.log(`R2에서 파일 발견: static${pathname}`);
                     const contentType = getContentType(pathname);
                     return new Response(object.body, {
                         headers: {
@@ -446,10 +473,11 @@ async function handleStaticFiles(request, env, url) {
                             ...CORS_HEADERS
                         }
                     });
+                } else {
+                    console.log(`R2에 파일 없음: static${pathname}`);
                 }
             } catch (r2Error) {
                 console.warn('R2에서 파일 로드 실패:', r2Error.message);
-                // R2 오류 시 기본 HTML로 fallback
             }
         }
         
@@ -544,6 +572,9 @@ function getDefaultHTML() {
         <p style="margin-top: 2rem; font-size: 0.9rem; opacity: 0.8;">
             Cloudflare Workers + R2 + WebSocket
         </p>
+        <div style="margin-top: 1rem;">
+            <a href="/api/debug" style="color: white; text-decoration: underline;">디버그 정보 보기</a>
+        </div>
     </div>
     <script src="app.js"></script>
 </body>
@@ -609,5 +640,15 @@ function getDefaultJS() {
         } catch (error) {
             console.log('WebSocket 테스트 오류:', error);
         }
+        
+        // 디버그 정보 가져오기
+        fetch('/api/debug')
+            .then(response => response.json())
+            .then(data => {
+                console.log('디버그 정보:', data);
+            })
+            .catch(error => {
+                console.log('디버그 정보 로드 실패:', error);
+            });
     `;
 } 
