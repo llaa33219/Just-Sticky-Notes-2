@@ -1,0 +1,511 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Kalam', cursive;
+    overflow: hidden;
+    background: #8B4513;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+}
+
+/* 나무 배경 */
+.wood-background {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        45deg,
+        #8B4513 0%,
+        #A0522D 25%,
+        #8B4513 50%,
+        #654321 75%,
+        #8B4513 100%
+    );
+    background-size: 200px 200px;
+    position: relative;
+}
+
+.wood-background::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: 
+        radial-gradient(circle at 25% 25%, #654321 2px, transparent 2px),
+        radial-gradient(circle at 75% 75%, #654321 1px, transparent 1px),
+        linear-gradient(90deg, rgba(101, 67, 33, 0.1) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(101, 67, 33, 0.1) 1px, transparent 1px);
+    background-size: 50px 50px, 25px 25px, 10px 10px, 10px 10px;
+}
+
+/* 로그인 화면 */
+#login-screen {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.login-sticky-note {
+    width: 300px;
+    height: 300px;
+    background: #ffeb3b;
+    transform: rotate(-5deg);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.login-sticky-note::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 30px;
+    background: rgba(255, 193, 7, 0.8);
+}
+
+.login-sticky-note:hover {
+    transform: rotate(-3deg) scale(1.05);
+    box-shadow: 0 6px 30px rgba(0, 0, 0, 0.4);
+}
+
+.sticky-note-content {
+    padding: 60px 40px 40px;
+    text-align: center;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+.google-icon {
+    font-size: 80px;
+    color: #4285f4;
+    margin-bottom: 20px;
+}
+
+.login-sticky-note p {
+    font-size: 24px;
+    font-weight: 700;
+    color: #333;
+}
+
+/* 메인 화면 */
+.infinite-canvas {
+    position: relative;
+    overflow: hidden;
+    cursor: grab;
+}
+
+.infinite-canvas.dragging {
+    cursor: grabbing;
+}
+
+#main-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+/* 도구 모음 */
+.tools-container {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 20px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 15px 25px;
+    border-radius: 50px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(10px);
+}
+
+.tool {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    padding: 15px 20px;
+    border-radius: 15px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    user-select: none;
+}
+
+.tool:hover {
+    background: rgba(33, 150, 243, 0.1);
+    transform: translateY(-2px);
+}
+
+.tool.active {
+    background: #2196f3;
+    color: white;
+}
+
+.tool .material-icons {
+    font-size: 28px;
+}
+
+.tool span:not(.material-icons) {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* 사용자 정보 */
+.user-info {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 10px 15px;
+    border-radius: 25px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(10px);
+}
+
+#user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+}
+
+#user-name {
+    font-weight: 600;
+    color: #333;
+}
+
+#logout-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 50%;
+    transition: background 0.3s ease;
+}
+
+#logout-btn:hover {
+    background: rgba(244, 67, 54, 0.1);
+    color: #f44336;
+}
+
+/* 줌 컨트롤 */
+.zoom-controls {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.zoom-controls button {
+    width: 45px;
+    height: 45px;
+    border: none;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+}
+
+.zoom-controls button:hover {
+    background: #2196f3;
+    color: white;
+    transform: scale(1.1);
+}
+
+/* 스티키 노트 편집 모달 */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: #ffeb3b;
+    width: 400px;
+    height: 500px;
+    border-radius: 15px;
+    box-shadow: 0 10px 50px rgba(0, 0, 0, 0.3);
+    position: relative;
+    transform: rotate(-1deg);
+}
+
+.sticky-note-editor {
+    padding: 20px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.note-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+#note-color {
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+#close-modal {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 50%;
+    transition: background 0.3s ease;
+}
+
+#close-modal:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+#note-text {
+    flex: 1;
+    border: none;
+    background: transparent;
+    font-family: 'Kalam', cursive;
+    font-size: 16px;
+    resize: none;
+    outline: none;
+    line-height: 1.6;
+    padding: 10px 0;
+}
+
+.note-tools {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+}
+
+.note-tools button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    font-family: 'Kalam', cursive;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.note-tools button.material-icons {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.save-btn {
+    background: #4caf50;
+    color: white;
+}
+
+.save-btn:hover {
+    background: #45a049;
+    transform: translateY(-2px);
+}
+
+.delete-btn {
+    background: #f44336;
+    color: white;
+}
+
+.delete-btn:hover {
+    background: #da190b;
+    transform: translateY(-2px);
+}
+
+.note-tools button.material-icons:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+/* 캔버스 위의 스티키 노트 */
+.canvas-sticky-note {
+    position: absolute;
+    background: #ffeb3b;
+    min-width: 150px;
+    min-height: 150px;
+    max-width: 300px;
+    max-height: 300px;
+    padding: 20px;
+    border-radius: 5px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.3s ease;
+    transform-origin: center;
+}
+
+.canvas-sticky-note:hover {
+    transform: scale(1.05);
+    z-index: 10;
+}
+
+.canvas-sticky-note.dragging {
+    z-index: 100;
+    transform: rotate(10deg) scale(1.1);
+}
+
+.canvas-sticky-note::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 20px;
+    background: rgba(255, 193, 7, 0.6);
+    border-radius: 5px 5px 0 0;
+}
+
+.note-content {
+    font-family: 'Kalam', cursive;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #333;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    margin-top: 25px;
+}
+
+.note-author {
+    position: absolute;
+    bottom: 5px;
+    right: 10px;
+    font-size: 10px;
+    opacity: 0.7;
+    font-weight: 600;
+}
+
+/* 로딩 화면 */
+.loading {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(139, 69, 19, 0.9);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+}
+
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 5px solid rgba(255, 255, 255, 0.3);
+    border-top: 5px solid #ffeb3b;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 20px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.loading p {
+    color: white;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+/* 떨어지는 애니메이션 */
+@keyframes fall {
+    0% {
+        transform: rotate(-5deg) translateY(0);
+    }
+    100% {
+        transform: rotate(-5deg) translateY(100vh);
+        opacity: 0;
+    }
+}
+
+.falling {
+    animation: fall 1s ease-in-out forwards;
+}
+
+/* 반응형 디자인 */
+@media (max-width: 768px) {
+    .tools-container {
+        bottom: 15px;
+        padding: 10px 15px;
+    }
+    
+    .tool {
+        padding: 10px 15px;
+    }
+    
+    .tool .material-icons {
+        font-size: 24px;
+    }
+    
+    .modal-content {
+        width: 90vw;
+        height: 70vh;
+        margin: 0 20px;
+    }
+    
+    .user-info {
+        top: 10px;
+        right: 10px;
+        padding: 8px 12px;
+    }
+    
+    .zoom-controls {
+        top: 10px;
+        left: 10px;
+    }
+    
+    .zoom-controls button {
+        width: 40px;
+        height: 40px;
+    }
+} 

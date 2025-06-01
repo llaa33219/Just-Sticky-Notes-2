@@ -1,0 +1,28 @@
+{
+  "name": "just-sticky-notes",
+  "version": "1.0.0",
+  "description": "A community site for real-time communication using sticky notes",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler pages dev --port 3000",
+    "build": "npm run build:client",
+    "build:client": "webpack --mode production",
+    "deploy": "wrangler pages deploy dist",
+    "wrangler": "wrangler"
+  },
+  "keywords": ["cloudflare", "workers", "sticky-notes", "real-time"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231025.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4",
+    "css-loader": "^6.8.1",
+    "style-loader": "^3.3.3",
+    "html-webpack-plugin": "^5.5.3",
+    "copy-webpack-plugin": "^11.0.0"
+  },
+  "dependencies": {
+    "fabric": "^5.3.0"
+  }
+} 

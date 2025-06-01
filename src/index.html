@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Just Sticky Notes - 스티키 노트로 소통하는 커뮤니티</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+<body>
+    <!-- 로그인 전 화면 -->
+    <div id="login-screen" class="screen">
+        <div class="wood-background"></div>
+        <div class="login-sticky-note" id="login-note">
+            <div class="sticky-note-content">
+                <div class="google-icon">
+                    <span class="material-icons">account_circle</span>
+                </div>
+                <p>구글로 로그인하기</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 메인 화면 -->
+    <div id="main-screen" class="screen hidden">
+        <div class="wood-background infinite-canvas" id="canvas-container">
+            <canvas id="main-canvas"></canvas>
+        </div>
+        
+        <!-- 도구 모음 -->
+        <div class="tools-container">
+            <div class="tool" id="move-tool" data-tool="move">
+                <span class="material-icons">pan_tool</span>
+                <span>이동</span>
+            </div>
+            <div class="tool" id="note-tool" data-tool="note">
+                <span class="material-icons">note_add</span>
+                <span>노트 생성</span>
+            </div>
+        </div>
+
+        <!-- 사용자 정보 -->
+        <div class="user-info">
+            <img id="user-avatar" src="" alt="사용자 아바타">
+            <span id="user-name"></span>
+            <button id="logout-btn" class="material-icons">logout</button>
+        </div>
+
+        <!-- 줌 컨트롤 -->
+        <div class="zoom-controls">
+            <button id="zoom-in" class="material-icons">zoom_in</button>
+            <button id="zoom-out" class="material-icons">zoom_out</button>
+            <button id="fit-screen" class="material-icons">fit_screen</button>
+        </div>
+    </div>
+
+    <!-- 스티키 노트 편집 모달 -->
+    <div id="note-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="sticky-note-editor">
+                <div class="note-header">
+                    <input type="color" id="note-color" value="#ffeb3b">
+                    <button id="close-modal" class="material-icons">close</button>
+                </div>
+                <textarea id="note-text" placeholder="여기에 메모를 작성하세요..."></textarea>
+                <div class="note-tools">
+                    <button id="underline-tool" class="material-icons">format_underlined</button>
+                    <button id="circle-tool" class="material-icons">radio_button_unchecked</button>
+                    <button id="save-note" class="save-btn">저장</button>
+                    <button id="delete-note" class="delete-btn">삭제</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 로딩 화면 -->
+    <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+        <p>연결 중...</p>
+    </div>
+</body>
+</html> 
