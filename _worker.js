@@ -163,10 +163,30 @@ async function handleWebSocketMessage(clientId, data, env) {
             client.websocket.send(JSON.stringify({
                 type: 'pong'
             }));
+            
+            // 이 시점에서 비활성 클라이언트 정리
+            cleanupInactiveClients();
             break;
             
         default:
             console.log('알 수 없는 메시지 타입:', data.type);
+    }
+}
+
+// 비활성 클라이언트 정리 함수
+function cleanupInactiveClients() {
+    const now = Date.now();
+    const inactiveThreshold = 30 * 60 * 1000; // 30분
+    
+    for (const [clientId, client] of connectedClients) {
+        if (now - client.lastSeen > inactiveThreshold) {
+            try {
+                client.websocket.close();
+            } catch (error) {
+                console.error('클라이언트 정리 오류:', error);
+            }
+            connectedClients.delete(clientId);
+        }
     }
 }
 
@@ -429,20 +449,4 @@ function getDefaultHTML() {
     </div>
 </body>
 </html>`;
-}
-
-// 연결 정리 (선택적 - 메모리 관리)
-setInterval(() => {
-    const now = Date.now();
-    for (const [clientId, client] of connectedClients) {
-        // 30분 이상 비활성 클라이언트 제거
-        if (now - client.lastSeen > 30 * 60 * 1000) {
-            try {
-                client.websocket.close();
-            } catch (error) {
-                console.error('클라이언트 정리 오류:', error);
-            }
-            connectedClients.delete(clientId);
-        }
-    }
-}, 5 * 60 * 1000); // 5분마다 실행 
+} 
