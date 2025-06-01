@@ -69,7 +69,7 @@
     <div id="note-editor" class="note-editor-modal hidden">
         <div class="note-editor-content">
             <div class="note-editor-header">
-                <h3>스티키 노트 작성</h3>
+                <h3>스티키 노트</h3>
                 <button id="close-editor" class="close-btn">&times;</button>
             </div>
             <div class="note-editor-body">
@@ -81,16 +81,26 @@
                     <button class="color-btn" data-color="#2196F3" style="background: #2196F3"></button>
                     <button class="color-btn" data-color="#4CAF50" style="background: #4CAF50"></button>
                 </div>
-                <textarea id="note-text" placeholder="여기에 메시지를 작성하세요..." maxlength="500"></textarea>
-                <div class="drawing-tools">
-                    <button id="pen-tool" class="drawing-btn active" title="펜">✏️</button>
-                    <button id="underline-tool" class="drawing-btn" title="밑줄">_</button>
-                    <button id="circle-tool" class="drawing-btn" title="동그라미">○</button>
-                    <button id="clear-drawing" class="drawing-btn" title="그림 지우기">🗑️</button>
+                
+                <!-- 통합 스티키 노트 캔버스 -->
+                <div class="sticky-note-preview" id="stickyNotePreview">
+                    <div class="note-tools">
+                        <button id="text-tool" class="tool-btn active" title="텍스트">✏️</button>
+                        <button id="pen-tool" class="tool-btn" title="펜">🖊️</button>
+                        <button id="underline-tool" class="tool-btn" title="밑줄">_</button>
+                        <button id="circle-tool" class="tool-btn" title="동그라미">○</button>
+                        <button id="clear-all" class="tool-btn" title="모두 지우기">🗑️</button>
+                    </div>
+                    
+                    <div class="note-canvas-container">
+                        <canvas id="unified-canvas" width="280" height="200"></canvas>
+                        <textarea id="note-text-overlay" placeholder="여기에 글을 쓰세요..." 
+                                maxlength="500" spellcheck="false"></textarea>
+                    </div>
                 </div>
-                <canvas id="drawing-canvas" width="300" height="200"></canvas>
+                
                 <div class="note-actions">
-                    <button id="save-note" class="save-btn">저장</button>
+                    <button id="save-note" class="save-btn">붙이기</button>
                     <button id="cancel-note" class="cancel-btn">취소</button>
                 </div>
             </div>

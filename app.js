@@ -12,6 +12,9 @@ let ws = null;
 let selectedColor = '#FFEB3B';
 let drawingTool = 'pen';
 let isDrawing = false;
+let draggedNote = null;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
 
 // DOM 요소들
 const loginScreen = document.getElementById('login-screen');
@@ -32,12 +35,22 @@ const logoutBtn = document.getElementById('logout-btn');
 const noteEditor = document.getElementById('note-editor');
 const closeEditorBtn = document.getElementById('close-editor');
 const colorBtns = document.querySelectorAll('.color-btn');
-const noteText = document.getElementById('note-text');
-const drawingCanvas = document.getElementById('drawing-canvas');
-const drawingCtx = drawingCanvas.getContext('2d');
+const stickyNotePreview = document.getElementById('stickyNotePreview');
+const unifiedCanvas = document.getElementById('unified-canvas');
+const unifiedCtx = unifiedCanvas.getContext('2d');
+const noteTextOverlay = document.getElementById('note-text-overlay');
 const saveNoteBtn = document.getElementById('save-note');
 const cancelNoteBtn = document.getElementById('cancel-note');
-const drawingBtns = document.querySelectorAll('.drawing-btn');
+
+// 새로운 도구 버튼들
+const textToolBtn = document.getElementById('text-tool');
+const penToolBtn = document.getElementById('pen-tool');
+const underlineToolBtn = document.getElementById('underline-tool');
+const circleToolBtn = document.getElementById('circle-tool');
+const clearAllBtn = document.getElementById('clear-all');
+
+let currentNoteTool = 'text';
+let noteIsDrawing = false;
 
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
@@ -115,24 +128,22 @@ function setupEventListeners() {
             colorBtns.forEach(b => b.classList.remove('selected'));
             btn.classList.add('selected');
             selectedColor = btn.dataset.color;
+            updateStickyNotePreview();
         });
     });
     
-    // 그리기 도구
-    drawingBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            if (e.target.id === 'clear-drawing') {
-                clearDrawing();
-            } else {
-                drawingBtns.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                setDrawingTool(e.target.id);
-            }
-        });
-    });
+    // 노트 도구들
+    textToolBtn.addEventListener('click', () => setNoteTool('text'));
+    penToolBtn.addEventListener('click', () => setNoteTool('pen'));
+    underlineToolBtn.addEventListener('click', () => setNoteTool('underline'));
+    circleToolBtn.addEventListener('click', () => setNoteTool('circle'));
+    clearAllBtn.addEventListener('click', clearAll);
     
-    // 그리기 캔버스
-    setupDrawingCanvas();
+    // 텍스트 오버레이 입력 이벤트
+    noteTextOverlay.addEventListener('input', updateStickyNotePreview);
+    
+    // 통합 캔버스 설정
+    setupUnifiedCanvas();
 }
 
 // 구글 로그인 처리
@@ -198,55 +209,90 @@ function setTool(tool) {
     }
 }
 
-// 줌 기능
 function zoom(factor) {
-    const oldZoom = zoomLevel;
-    zoomLevel = Math.max(0.1, Math.min(3, zoomLevel * factor));
-    
-    // 화면 중앙을 기준으로 줌
     const rect = canvasContainer.getBoundingClientRect();
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
     
-    // 줌 중심점 조정
-    panX = centerX - (centerX - panX) * (zoomLevel / oldZoom);
-    panY = centerY - (centerY - panY) * (zoomLevel / oldZoom);
+    const oldZoom = zoomLevel;
+    zoomLevel = Math.max(0.1, Math.min(3, zoomLevel * factor));
+    
+    // 중심점 기준으로 줌
+    const zoomChange = zoomLevel / oldZoom;
+    panX = centerX - (centerX - panX) * zoomChange;
+    panY = centerY - (centerY - panY) * zoomChange;
     
     updateCanvasTransform();
     updateZoomLevel();
 }
 
-// 캔버스 변환 업데이트
 function updateCanvasTransform() {
     canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
 }
 
-// 줌 레벨 표시 업데이트
 function updateZoomLevel() {
     zoomLevelSpan.textContent = Math.round(zoomLevel * 100) + '%';
 }
 
-// 캔버스 설정
 function setupCanvas() {
     updateCanvasTransform();
     updateZoomLevel();
 }
 
-// 마우스 이벤트 처리
 function handleCanvasMouseDown(e) {
-    if (currentTool === 'move') {
+    const rect = canvasContainer.getBoundingClientRect();
+    const x = (e.clientX - rect.left - panX) / zoomLevel;
+    const y = (e.clientY - rect.top - panY) / zoomLevel;
+    
+    // 스티키 노트 클릭 확인 (드래그용)
+    const clickedNote = e.target.closest('.sticky-note');
+    if (clickedNote && currentTool === 'move') {
+        const noteId = clickedNote.dataset.noteId;
+        const note = stickyNotes.find(n => n.id === noteId);
+        
+        // 본인이 만든 노트만 드래그 가능
+        if (note && note.authorId === currentUser.id) {
+            draggedNote = clickedNote;
+            const noteRect = clickedNote.getBoundingClientRect();
+            const canvasRect = canvas.getBoundingClientRect();
+            dragOffsetX = (e.clientX - noteRect.left) / zoomLevel;
+            dragOffsetY = (e.clientY - noteRect.top) / zoomLevel;
+            clickedNote.style.zIndex = '1000';
+            e.preventDefault();
+            return;
+        }
+    }
+    
+    if (currentTool === 'note' && !clickedNote) {
+        openNoteEditor(e);
+    } else if (currentTool === 'move' && !draggedNote) {
         isDragging = true;
-        canvasContainer.classList.add('grabbing');
         lastMouseX = e.clientX;
         lastMouseY = e.clientY;
-    } else if (currentTool === 'note') {
-        // 노트 생성 모달 열기
-        openNoteEditor(e);
+        canvasContainer.style.cursor = 'grabbing';
     }
 }
 
 function handleCanvasMouseMove(e) {
-    if (isDragging && currentTool === 'move') {
+    if (draggedNote) {
+        // 스티키 노트 드래그
+        const rect = canvasContainer.getBoundingClientRect();
+        const newX = (e.clientX - rect.left - panX) / zoomLevel - dragOffsetX;
+        const newY = (e.clientY - rect.top - panY) / zoomLevel - dragOffsetY;
+        
+        draggedNote.style.left = newX + 'px';
+        draggedNote.style.top = newY + 'px';
+        
+        // 노트 데이터 업데이트
+        const noteId = draggedNote.dataset.noteId;
+        const note = stickyNotes.find(n => n.id === noteId);
+        if (note) {
+            note.x = newX;
+            note.y = newY;
+        }
+        
+    } else if (isDragging && currentTool === 'move') {
+        // 캔버스 패닝
         const deltaX = e.clientX - lastMouseX;
         const deltaY = e.clientY - lastMouseY;
         
@@ -261,9 +307,12 @@ function handleCanvasMouseMove(e) {
 }
 
 function handleCanvasMouseUp(e) {
-    if (isDragging) {
+    if (draggedNote) {
+        draggedNote.style.zIndex = '';
+        draggedNote = null;
+    } else {
         isDragging = false;
-        canvasContainer.classList.remove('grabbing');
+        canvasContainer.style.cursor = '';
     }
 }
 
@@ -273,107 +322,147 @@ function handleCanvasWheel(e) {
     zoom(factor);
 }
 
-// 노트 에디터 열기
 function openNoteEditor(e) {
-    // 마우스 위치를 캔버스 좌표로 변환
     const rect = canvasContainer.getBoundingClientRect();
     const x = (e.clientX - rect.left - panX) / zoomLevel;
     const y = (e.clientY - rect.top - panY) / zoomLevel;
     
-    // 에디터에 위치 정보 저장
     noteEditor.dataset.x = x;
     noteEditor.dataset.y = y;
-    
-    // 에디터 초기화
-    noteText.value = '';
-    clearDrawing();
-    selectedColor = '#FFEB3B';
-    colorBtns[0].classList.add('selected');
-    
     noteEditor.classList.remove('hidden');
+    
+    // 초기화
+    noteTextOverlay.value = '';
+    clearDrawing();
+    
+    // 첫 번째 색상 선택
+    colorBtns[0].click();
+    
+    // 텍스트 도구로 시작
+    setNoteTool('text');
+    
+    // 텍스트 입력 포커스
+    setTimeout(() => noteTextOverlay.focus(), 100);
 }
 
-// 노트 에디터 닫기
 function closeNoteEditor() {
     noteEditor.classList.add('hidden');
+    // 정리
+    noteTextOverlay.value = '';
+    clearDrawing();
 }
 
-// 그리기 캔버스 설정
 function setupDrawingCanvas() {
-    drawingCanvas.addEventListener('mousedown', startDrawing);
-    drawingCanvas.addEventListener('mousemove', draw);
-    drawingCanvas.addEventListener('mouseup', stopDrawing);
-    drawingCanvas.addEventListener('mouseout', stopDrawing);
+    unifiedCtx.strokeStyle = '#333';
+    unifiedCtx.lineWidth = 2;
+    unifiedCtx.lineCap = 'round';
+    
+    unifiedCanvas.addEventListener('mousedown', startDrawing);
+    unifiedCanvas.addEventListener('mousemove', draw);
+    unifiedCanvas.addEventListener('mouseup', stopDrawing);
+    unifiedCanvas.addEventListener('mouseout', stopDrawing);
 }
 
 function startDrawing(e) {
-    isDrawing = true;
-    const rect = drawingCanvas.getBoundingClientRect();
+    if (currentNoteTool === 'text') return; // 텍스트 모드에서는 그리기 비활성화
+    
+    noteIsDrawing = true;
+    const rect = unifiedCanvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    drawingCtx.beginPath();
-    drawingCtx.moveTo(x, y);
+    if (currentNoteTool === 'pen') {
+        unifiedCtx.beginPath();
+        unifiedCtx.moveTo(x, y);
+    }
 }
 
 function draw(e) {
-    if (!isDrawing) return;
+    if (!noteIsDrawing || currentNoteTool === 'text') return;
     
-    const rect = drawingCanvas.getBoundingClientRect();
+    const rect = unifiedCanvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    drawingCtx.lineWidth = 2;
-    drawingCtx.lineCap = 'round';
-    drawingCtx.strokeStyle = '#333';
-    
-    if (drawingTool === 'pen') {
-        drawingCtx.lineTo(x, y);
-        drawingCtx.stroke();
-    } else if (drawingTool === 'underline-tool') {
+    if (currentNoteTool === 'pen') {
+        unifiedCtx.lineTo(x, y);
+        unifiedCtx.stroke();
+    } else if (currentNoteTool === 'underline') {
         // 밑줄 그리기
-        drawingCtx.beginPath();
-        drawingCtx.moveTo(x - 20, y);
-        drawingCtx.lineTo(x + 20, y);
-        drawingCtx.stroke();
+        unifiedCtx.beginPath();
+        unifiedCtx.moveTo(x - 20, y);
+        unifiedCtx.lineTo(x + 20, y);
+        unifiedCtx.stroke();
         stopDrawing();
-    } else if (drawingTool === 'circle-tool') {
+    } else if (currentNoteTool === 'circle') {
         // 동그라미 그리기
-        drawingCtx.beginPath();
-        drawingCtx.arc(x, y, 15, 0, 2 * Math.PI);
-        drawingCtx.stroke();
+        unifiedCtx.beginPath();
+        unifiedCtx.arc(x, y, 15, 0, 2 * Math.PI);
+        unifiedCtx.stroke();
         stopDrawing();
     }
 }
 
 function stopDrawing() {
-    isDrawing = false;
+    noteIsDrawing = false;
 }
 
 function setDrawingTool(tool) {
-    drawingTool = tool;
+    currentNoteTool = tool;
 }
 
 function clearDrawing() {
-    drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+    unifiedCtx.clearRect(0, 0, unifiedCanvas.width, unifiedCanvas.height);
 }
 
 // 노트 저장
 async function saveNote() {
-    const text = noteText.value.trim();
-    const drawingData = drawingCanvas.toDataURL();
+    const text = noteTextOverlay.value.trim();
+    const drawingData = unifiedCanvas.toDataURL();
     const x = parseFloat(noteEditor.dataset.x);
     const y = parseFloat(noteEditor.dataset.y);
     
-    if (!text && drawingData === drawingCanvas.toDataURL()) {
+    // 빈 캔버스 체크
+    const emptyCanvas = document.createElement('canvas');
+    emptyCanvas.width = unifiedCanvas.width;
+    emptyCanvas.height = unifiedCanvas.height;
+    const isEmpty = drawingData === emptyCanvas.toDataURL();
+    
+    if (!text && isEmpty) {
         alert('내용을 입력해주세요!');
         return;
+    }
+    
+    // 텍스트와 그림을 합친 최종 이미지 생성
+    const finalCanvas = document.createElement('canvas');
+    finalCanvas.width = unifiedCanvas.width;
+    finalCanvas.height = unifiedCanvas.height;
+    const finalCtx = finalCanvas.getContext('2d');
+    
+    // 그림 먼저 그리기
+    if (!isEmpty) {
+        finalCtx.drawImage(unifiedCanvas, 0, 0);
+    }
+    
+    // 텍스트 오버레이
+    if (text) {
+        finalCtx.fillStyle = '#333';
+        finalCtx.font = '18px Caveat, cursive';
+        finalCtx.textAlign = 'left';
+        finalCtx.textBaseline = 'top';
+        
+        // 여러 줄 텍스트 처리
+        const lines = text.split('\n');
+        const lineHeight = 22;
+        lines.forEach((line, index) => {
+            finalCtx.fillText(line, 10, 10 + (index * lineHeight));
+        });
     }
     
     const note = {
         id: 'note_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
         text: text,
-        drawing: drawingData,
+        drawing: finalCanvas.toDataURL(),
         color: selectedColor,
         x: x,
         y: y,
@@ -397,14 +486,24 @@ async function saveNote() {
     closeNoteEditor();
 }
 
-// 스티키 노트 추가
+// 스티키 노트 추가 (중복 방지)
 function addStickyNote(note) {
+    // 이미 존재하는 노트인지 확인
+    if (stickyNotes.find(n => n.id === note.id)) {
+        return;
+    }
+    
     stickyNotes.push(note);
     renderStickyNote(note);
 }
 
 // 스티키 노트 렌더링
 function renderStickyNote(note) {
+    // 이미 렌더링된 노트인지 확인
+    if (canvas.querySelector(`[data-note-id="${note.id}"]`)) {
+        return;
+    }
+    
     const noteElement = document.createElement('div');
     noteElement.className = 'sticky-note';
     noteElement.style.backgroundColor = note.color;
@@ -413,23 +512,30 @@ function renderStickyNote(note) {
     noteElement.style.transform = `rotate(${note.rotation}deg)`;
     noteElement.dataset.noteId = note.id;
     
+    // 본인이 만든 노트는 드래그 가능 표시
+    if (note.authorId === currentUser.id) {
+        noteElement.classList.add('draggable');
+    }
+    
     const contentDiv = document.createElement('div');
     contentDiv.className = 'note-content';
     
-    if (note.text) {
-        const textDiv = document.createElement('div');
-        textDiv.className = 'note-text';
-        textDiv.textContent = note.text;
-        contentDiv.appendChild(textDiv);
-    }
-    
-    if (note.drawing && note.drawing !== drawingCanvas.toDataURL()) {
+    // 통합 이미지가 있으면 표시
+    if (note.drawing) {
         const drawingImg = document.createElement('img');
         drawingImg.className = 'note-drawing';
         drawingImg.src = note.drawing;
         drawingImg.style.maxWidth = '100%';
         drawingImg.style.height = 'auto';
         contentDiv.appendChild(drawingImg);
+    }
+    
+    // 텍스트만 있고 그림이 없는 경우 (하위 호환성)
+    if (note.text && !note.drawing) {
+        const textDiv = document.createElement('div');
+        textDiv.className = 'note-text';
+        textDiv.textContent = note.text;
+        contentDiv.appendChild(textDiv);
     }
     
     const authorDiv = document.createElement('div');
@@ -468,13 +574,13 @@ function connectWebSocket() {
         
         switch (data.type) {
             case 'note_created':
-                // 다른 사용자가 만든 노트
+                // 다른 사용자가 만든 노트만 추가
                 if (data.note.authorId !== currentUser.id) {
                     addStickyNote(data.note);
                 }
                 break;
             case 'notes_load':
-                // 기존 노트들 로드
+                // 기존 노트들 로드 (중복 방지)
                 data.notes.forEach(note => addStickyNote(note));
                 break;
             case 'user_joined':
@@ -482,6 +588,12 @@ function connectWebSocket() {
                 break;
             case 'user_left':
                 console.log('사용자 퇴장:', data.user.name);
+                break;
+            case 'auth_success':
+                // 인증 성공 후 노트 로드 요청
+                ws.send(JSON.stringify({
+                    type: 'load_notes'
+                }));
                 break;
         }
     };
@@ -534,4 +646,49 @@ document.addEventListener('keydown', (e) => {
 });
 
 // 컨텍스트 메뉴 비활성화 (우클릭 방지)
-document.addEventListener('contextmenu', e => e.preventDefault()); 
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+function updateStickyNotePreview() {
+    // 스티키 노트 프리뷰 색상 업데이트
+    stickyNotePreview.style.backgroundColor = selectedColor;
+}
+
+function setNoteTool(tool) {
+    currentNoteTool = tool;
+    
+    // 도구 버튼 상태 업데이트
+    document.querySelectorAll('.note-tools .tool-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    // 텍스트 오버레이 상태 변경
+    if (tool === 'text') {
+        textToolBtn.classList.add('active');
+        noteTextOverlay.classList.add('text-mode');
+        unifiedCanvas.style.pointerEvents = 'none';
+    } else {
+        if (tool === 'pen') penToolBtn.classList.add('active');
+        else if (tool === 'underline') underlineToolBtn.classList.add('active');
+        else if (tool === 'circle') circleToolBtn.classList.add('active');
+        
+        noteTextOverlay.classList.remove('text-mode');
+        unifiedCanvas.style.pointerEvents = 'all';
+    }
+}
+
+function clearAll() {
+    clearDrawing();
+    noteTextOverlay.value = '';
+    updateStickyNotePreview();
+}
+
+function setupUnifiedCanvas() {
+    unifiedCtx.strokeStyle = '#333';
+    unifiedCtx.lineWidth = 2;
+    unifiedCtx.lineCap = 'round';
+    
+    unifiedCanvas.addEventListener('mousedown', startDrawing);
+    unifiedCanvas.addEventListener('mousemove', draw);
+    unifiedCanvas.addEventListener('mouseup', stopDrawing);
+    unifiedCanvas.addEventListener('mouseout', stopDrawing);
+} 
