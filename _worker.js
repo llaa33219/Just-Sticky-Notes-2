@@ -184,6 +184,17 @@ async function handleWebSocketMessage(clientId, data, env) {
                 });
                 break;
                 
+            case 'update_note':
+                // 스티키 노트 위치 업데이트
+                await updateNoteInR2(env, data.noteId, data.x, data.y);
+                broadcastMessage({
+                    type: 'note_updated',
+                    noteId: data.noteId,
+                    x: data.x,
+                    y: data.y
+                }, clientId);
+                break;
+                
             case 'ping':
                 // 연결 상태 확인
                 client.lastSeen = Date.now();
@@ -449,6 +460,58 @@ async function deleteNoteFromR2(env, noteId) {
         
     } catch (error) {
         console.error('R2에서 노트 삭제 오류:', error);
+    }
+}
+
+// R2에서 노트 위치 업데이트
+async function updateNoteInR2(env, noteId, x, y) {
+    try {
+        if (!env.STICKY_NOTES_BUCKET) {
+            console.warn('STICKY_NOTES_BUCKET이 설정되지 않아 노트를 업데이트할 수 없습니다');
+            return;
+        }
+        
+        console.log('노트 위치 업데이트 시작:', noteId, x, y);
+        
+        // 기존 노트들 로드
+        const existingNotes = await loadNotesFromR2(env);
+        
+        // 해당 노트 찾아서 위치 업데이트
+        const noteIndex = existingNotes.findIndex(note => note.id === noteId);
+        if (noteIndex !== -1) {
+            existingNotes[noteIndex].x = x;
+            existingNotes[noteIndex].y = y;
+            existingNotes[noteIndex].lastUpdated = Date.now();
+            
+            // R2에 업데이트된 목록 저장
+            await env.STICKY_NOTES_BUCKET.put(
+                'notes.json',
+                JSON.stringify(existingNotes),
+                {
+                    httpMetadata: {
+                        contentType: 'application/json',
+                    },
+                }
+            );
+            
+            // 개별 노트 파일도 업데이트
+            await env.STICKY_NOTES_BUCKET.put(
+                `notes/${noteId}.json`,
+                JSON.stringify(existingNotes[noteIndex]),
+                {
+                    httpMetadata: {
+                        contentType: 'application/json',
+                    },
+                }
+            );
+            
+            console.log('노트 위치 업데이트 완료:', noteId);
+        } else {
+            console.warn('업데이트할 노트를 찾을 수 없음:', noteId);
+        }
+        
+    } catch (error) {
+        console.error('R2에서 노트 업데이트 오류:', error);
     }
 }
 

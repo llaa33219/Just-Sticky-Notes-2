@@ -15,6 +15,9 @@ let isDrawing = false;
 let draggedNote = null;
 let dragOffsetX = 0;
 let dragOffsetY = 0;
+let isDraggingNote = false;
+let lastUpdateTime = 0;
+let updateThrottle = 100; // 100ms 간격으로 업데이트 제한
 
 // DOM 요소들
 const loginScreen = document.getElementById('login-screen');
@@ -252,12 +255,16 @@ function handleCanvasMouseDown(e) {
         
         // 본인이 만든 노트만 드래그 가능
         if (note && note.authorId === currentUser.id) {
+            isDraggingNote = true;
             draggedNote = clickedNote;
             const noteRect = clickedNote.getBoundingClientRect();
-            const canvasRect = canvas.getBoundingClientRect();
             dragOffsetX = (e.clientX - noteRect.left) / zoomLevel;
             dragOffsetY = (e.clientY - noteRect.top) / zoomLevel;
+            
+            // 드래그 시작 시 애니메이션 비활성화
+            clickedNote.style.transition = 'none';
             clickedNote.style.zIndex = '1000';
+            
             e.preventDefault();
             return;
         }
@@ -270,11 +277,14 @@ function handleCanvasMouseDown(e) {
         lastMouseX = e.clientX;
         lastMouseY = e.clientY;
         canvasContainer.style.cursor = 'grabbing';
+        
+        // 패닝 시 부드러운 움직임을 위해 transition 제거
+        canvas.style.transition = 'none';
     }
 }
 
 function handleCanvasMouseMove(e) {
-    if (draggedNote) {
+    if (isDraggingNote && draggedNote) {
         // 스티키 노트 드래그
         const rect = canvasContainer.getBoundingClientRect();
         const newX = (e.clientX - rect.left - panX) / zoomLevel - dragOffsetX;
@@ -289,30 +299,53 @@ function handleCanvasMouseMove(e) {
         if (note) {
             note.x = newX;
             note.y = newY;
+            
+            // 스로틀링을 통한 실시간 위치 업데이트
+            const now = Date.now();
+            if (now - lastUpdateTime > updateThrottle) {
+                sendNoteUpdate(note);
+                lastUpdateTime = now;
+            }
         }
         
     } else if (isDragging && currentTool === 'move') {
-        // 캔버스 패닝
-        const deltaX = e.clientX - lastMouseX;
-        const deltaY = e.clientY - lastMouseY;
-        
-        panX += deltaX;
-        panY += deltaY;
-        
-        updateCanvasTransform();
-        
-        lastMouseX = e.clientX;
-        lastMouseY = e.clientY;
+        // 캔버스 패닝 - requestAnimationFrame으로 최적화
+        requestAnimationFrame(() => {
+            const deltaX = e.clientX - lastMouseX;
+            const deltaY = e.clientY - lastMouseY;
+            
+            panX += deltaX;
+            panY += deltaY;
+            
+            updateCanvasTransform();
+            
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+        });
     }
 }
 
 function handleCanvasMouseUp(e) {
-    if (draggedNote) {
+    if (isDraggingNote && draggedNote) {
+        // 드래그 종료 시 애니메이션 재활성화
+        draggedNote.style.transition = 'all 0.2s ease';
         draggedNote.style.zIndex = '';
+        
+        // 최종 위치 업데이트 전송
+        const noteId = draggedNote.dataset.noteId;
+        const note = stickyNotes.find(n => n.id === noteId);
+        if (note) {
+            sendNoteUpdate(note);
+        }
+        
+        isDraggingNote = false;
         draggedNote = null;
     } else {
         isDragging = false;
         canvasContainer.style.cursor = '';
+        
+        // 패닝 종료 시 transition 복원
+        canvas.style.transition = 'transform 0.1s ease';
     }
 }
 
@@ -579,6 +612,10 @@ function connectWebSocket() {
                     addStickyNote(data.note);
                 }
                 break;
+            case 'note_updated':
+                // 노트 위치 업데이트
+                updateNotePosition(data.noteId, data.x, data.y);
+                break;
             case 'notes_load':
                 // 기존 노트들 로드 (중복 방지)
                 data.notes.forEach(note => addStickyNote(note));
@@ -691,4 +728,42 @@ function setupUnifiedCanvas() {
     unifiedCanvas.addEventListener('mousemove', draw);
     unifiedCanvas.addEventListener('mouseup', stopDrawing);
     unifiedCanvas.addEventListener('mouseout', stopDrawing);
+}
+
+// 노트 위치 업데이트 전송
+function sendNoteUpdate(note) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'update_note',
+            noteId: note.id,
+            x: note.x,
+            y: note.y
+        }));
+    }
+}
+
+// 노트 위치 업데이트 (다른 사용자의 노트 이동 반영)
+function updateNotePosition(noteId, x, y) {
+    // 로컬 데이터 업데이트
+    const note = stickyNotes.find(n => n.id === noteId);
+    if (note) {
+        note.x = x;
+        note.y = y;
+    }
+    
+    // DOM 요소 업데이트 (현재 드래그 중인 노트가 아닌 경우에만)
+    if (!isDraggingNote || (draggedNote && draggedNote.dataset.noteId !== noteId)) {
+        const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
+        if (noteElement) {
+            // 부드러운 애니메이션으로 위치 이동
+            noteElement.style.transition = 'left 0.3s ease, top 0.3s ease';
+            noteElement.style.left = x + 'px';
+            noteElement.style.top = y + 'px';
+            
+            // 애니메이션 후 원래 transition으로 복원
+            setTimeout(() => {
+                noteElement.style.transition = 'all 0.2s ease';
+            }, 300);
+        }
+    }
 } 
