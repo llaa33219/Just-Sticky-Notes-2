@@ -1,0 +1,48 @@
+{
+  "name": "just-sticky-notes",
+  "version": "1.0.0",
+  "description": "실시간 스티키 노트 커뮤니티 사이트 - Cloudflare Workers + R2 + WebSocket",
+  "main": "_worker.js",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "tail": "wrangler tail",
+    "publish": "wrangler deploy",
+    "preview": "wrangler dev",
+    "create-bucket": "wrangler r2 bucket create just-sticky-notes-storage",
+    "create-preview-bucket": "wrangler r2 bucket create just-sticky-notes-storage-preview",
+    "upload-static": "npm run upload-html && npm run upload-css && npm run upload-js",
+    "upload-html": "wrangler r2 object put just-sticky-notes-storage/static/index.html --file index.html --content-type text/html",
+    "upload-css": "wrangler r2 object put just-sticky-notes-storage/static/styles.css --file styles.css --content-type text/css",
+    "upload-js": "wrangler r2 object put just-sticky-notes-storage/static/app.js --file app.js --content-type application/javascript",
+    "setup": "npm run create-bucket && npm run create-preview-bucket && npm run upload-static",
+    "clean": "wrangler r2 bucket delete just-sticky-notes-storage && wrangler r2 bucket delete just-sticky-notes-storage-preview"
+  },
+  "keywords": [
+    "sticky-notes",
+    "community",
+    "realtime",
+    "websocket",
+    "cloudflare-workers",
+    "r2",
+    "collaborative"
+  ],
+  "author": "Luke",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/just-sticky-notes.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/just-sticky-notes/issues"
+  },
+  "homepage": "https://github.com/your-username/just-sticky-notes#readme"
+} 

@@ -1,0 +1,46 @@
+name = "just-sticky-notes"
+main = "_worker.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Worker 환경 설정
+[env.production]
+name = "just-sticky-notes-prod"
+
+[env.staging]
+name = "just-sticky-notes-staging"
+
+# R2 버킷 바인딩
+[[r2_buckets]]
+binding = "STICKY_NOTES_BUCKET"
+bucket_name = "just-sticky-notes-storage"
+preview_bucket_name = "just-sticky-notes-storage-preview"
+
+# 환경 변수 (옵션)
+[vars]
+ENVIRONMENT = "production"
+MAX_NOTES_PER_USER = "50"
+MAX_TOTAL_NOTES = "1000"
+
+# Durable Objects (필요시 확장 가능)
+# [[durable_objects.bindings]]
+# name = "STICKY_NOTES_STATE"
+# class_name = "StickyNotesState"
+
+# KV 네임스페이스 (세션 관리용, 옵션)
+# [[kv_namespaces]]
+# binding = "SESSIONS"
+# id = "your-kv-namespace-id"
+# preview_id = "your-preview-kv-namespace-id"
+
+# 메모리 및 CPU 제한
+[placement]
+mode = "smart"
+
+# 보안 헤더 설정
+[build]
+command = ""
+
+# 로그 설정
+[observability]
+enabled = true 

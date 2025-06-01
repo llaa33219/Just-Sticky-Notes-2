@@ -1,0 +1,612 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Kalam', cursive;
+    overflow: hidden;
+    height: 100vh;
+    background: #8B4513;
+}
+
+/* 로그인 화면 */
+.login-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.wood-background {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: 
+        radial-gradient(circle at 20% 30%, rgba(139, 69, 19, 0.1) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(160, 82, 45, 0.1) 0%, transparent 50%),
+        linear-gradient(135deg, #D2B48C 0%, #DEB887 25%, #F5DEB3 50%, #DEB887 75%, #D2B48C 100%);
+    background-size: 200px 200px, 300px 300px, 100% 100%;
+}
+
+.wood-background::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: 
+        repeating-linear-gradient(
+            90deg,
+            rgba(139, 69, 19, 0.03) 0px,
+            rgba(139, 69, 19, 0.03) 1px,
+            transparent 1px,
+            transparent 50px
+        ),
+        repeating-linear-gradient(
+            0deg,
+            rgba(139, 69, 19, 0.02) 0px,
+            rgba(139, 69, 19, 0.02) 1px,
+            transparent 1px,
+            transparent 80px
+        );
+}
+
+.login-sticky-note {
+    background: #FFEB3B;
+    width: 200px;
+    height: 200px;
+    border-radius: 5px;
+    box-shadow: 
+        0 5px 15px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    transform: rotate(-5deg);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Caveat', cursive;
+    font-size: 18px;
+    font-weight: 600;
+    color: #333;
+}
+
+.login-sticky-note::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 30px;
+    height: 15px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 15px;
+}
+
+.login-sticky-note:hover {
+    transform: rotate(-3deg) scale(1.05);
+    box-shadow: 
+        0 8px 25px rgba(0, 0, 0, 0.4),
+        inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.google-icon {
+    margin-bottom: 15px;
+    animation: bounce 2s infinite;
+}
+
+@keyframes bounce {
+    0%, 20%, 50%, 80%, 100% {
+        transform: translateY(0);
+    }
+    40% {
+        transform: translateY(-10px);
+    }
+    60% {
+        transform: translateY(-5px);
+    }
+}
+
+/* 스티키 노트 떨어지는 애니메이션 */
+.falling {
+    animation: fall 1s ease-in forwards;
+}
+
+@keyframes fall {
+    0% {
+        transform: rotate(-5deg) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: rotate(15deg) translateY(100vh) scale(0.8);
+        opacity: 0;
+    }
+}
+
+/* 메인 앱 */
+.app {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* 무한 캔버스 */
+.canvas-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: calc(100% - 80px);
+    overflow: hidden;
+    cursor: grab;
+}
+
+.canvas-container.grabbing {
+    cursor: grabbing;
+}
+
+.canvas {
+    position: absolute;
+    width: 10000px;
+    height: 10000px;
+    transform-origin: 0 0;
+    transition: transform 0.1s ease;
+}
+
+.wood-texture {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: 
+        radial-gradient(circle at 20% 30%, rgba(139, 69, 19, 0.1) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(160, 82, 45, 0.1) 0%, transparent 50%),
+        linear-gradient(135deg, #D2B48C 0%, #DEB887 25%, #F5DEB3 50%, #DEB887 75%, #D2B48C 100%);
+    background-size: 400px 400px, 600px 600px, 100% 100%;
+}
+
+.wood-texture::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: 
+        repeating-linear-gradient(
+            90deg,
+            rgba(139, 69, 19, 0.03) 0px,
+            rgba(139, 69, 19, 0.03) 2px,
+            transparent 2px,
+            transparent 100px
+        ),
+        repeating-linear-gradient(
+            0deg,
+            rgba(139, 69, 19, 0.02) 0px,
+            rgba(139, 69, 19, 0.02) 1px,
+            transparent 1px,
+            transparent 160px
+        );
+}
+
+/* 스티키 노트 */
+.sticky-note {
+    position: absolute;
+    width: 200px;
+    min-height: 200px;
+    border-radius: 5px;
+    box-shadow: 
+        0 5px 15px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    cursor: pointer;
+    font-family: 'Caveat', cursive;
+    font-size: 16px;
+    line-height: 1.4;
+    color: #333;
+    padding: 20px 15px 15px;
+    overflow: hidden;
+    transition: transform 0.2s ease;
+    animation: appearNote 0.5s ease-out;
+}
+
+.sticky-note::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 30px;
+    height: 15px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 15px;
+}
+
+.sticky-note:hover {
+    transform: scale(1.02);
+    z-index: 10;
+}
+
+.note-content {
+    position: relative;
+    z-index: 2;
+}
+
+.note-text {
+    margin-bottom: 10px;
+    word-wrap: break-word;
+}
+
+.note-drawing {
+    margin-top: 10px;
+}
+
+.note-author {
+    position: absolute;
+    bottom: 5px;
+    right: 10px;
+    font-size: 12px;
+    opacity: 0.7;
+    font-weight: 400;
+}
+
+@keyframes appearNote {
+    0% {
+        transform: scale(0) rotate(180deg);
+        opacity: 0;
+    }
+    100% {
+        transform: scale(1) rotate(0deg);
+        opacity: 1;
+    }
+}
+
+/* 도구바 */
+.toolbar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 80px;
+    background: rgba(139, 69, 19, 0.95);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    border-top: 3px solid #8B4513;
+    box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.3);
+}
+
+.tool-group {
+    display: flex;
+    gap: 10px;
+}
+
+.tool-btn {
+    width: 50px;
+    height: 50px;
+    border: none;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    color: #333;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.tool-btn:hover {
+    background: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.tool-btn.active {
+    background: #FFEB3B;
+    box-shadow: 0 4px 12px rgba(255, 235, 59, 0.4);
+}
+
+.zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 10px 20px;
+    border-radius: 25px;
+}
+
+.zoom-btn {
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 50%;
+    background: #333;
+    color: white;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.zoom-btn:hover {
+    background: #555;
+    transform: scale(1.1);
+}
+
+#zoom-level {
+    font-weight: 600;
+    color: #333;
+    min-width: 50px;
+    text-align: center;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 8px 15px;
+    border-radius: 25px;
+}
+
+.user-avatar {
+    width: 35px;
+    height: 35px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+}
+
+.user-info span {
+    font-weight: 600;
+    color: #333;
+}
+
+.logout-btn {
+    background: #f44336;
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.2s ease;
+}
+
+.logout-btn:hover {
+    background: #d32f2f;
+}
+
+/* 노트 에디터 모달 */
+.note-editor-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    backdrop-filter: blur(5px);
+}
+
+.note-editor-content {
+    background: white;
+    border-radius: 15px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow: auto;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    animation: modalAppear 0.3s ease-out;
+}
+
+@keyframes modalAppear {
+    0% {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.note-editor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.note-editor-header h3 {
+    font-family: 'Caveat', cursive;
+    font-size: 24px;
+    color: #333;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    font-size: 30px;
+    cursor: pointer;
+    color: #999;
+    transition: color 0.2s ease;
+}
+
+.close-btn:hover {
+    color: #333;
+}
+
+.note-editor-body {
+    padding: 20px;
+}
+
+.color-picker {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    justify-content: center;
+}
+
+.color-btn {
+    width: 40px;
+    height: 40px;
+    border: 3px solid transparent;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.color-btn:hover,
+.color-btn.selected {
+    border-color: #333;
+    transform: scale(1.1);
+}
+
+#note-text {
+    width: 100%;
+    height: 120px;
+    border: 2px solid #ddd;
+    border-radius: 10px;
+    padding: 15px;
+    font-family: 'Caveat', cursive;
+    font-size: 18px;
+    resize: none;
+    outline: none;
+    margin-bottom: 20px;
+    transition: border-color 0.2s ease;
+}
+
+#note-text:focus {
+    border-color: #FFEB3B;
+}
+
+.drawing-tools {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+.drawing-btn {
+    width: 40px;
+    height: 40px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    background: white;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s ease;
+}
+
+.drawing-btn:hover,
+.drawing-btn.active {
+    border-color: #FFEB3B;
+    background: #FFEB3B;
+}
+
+#drawing-canvas {
+    border: 2px solid #ddd;
+    border-radius: 10px;
+    cursor: crosshair;
+    display: block;
+    margin: 0 auto 20px;
+    background: white;
+}
+
+.note-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.save-btn,
+.cancel-btn {
+    padding: 12px 25px;
+    border: none;
+    border-radius: 25px;
+    font-family: 'Kalam', cursive;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.save-btn {
+    background: #4CAF50;
+    color: white;
+}
+
+.save-btn:hover {
+    background: #45a049;
+    transform: translateY(-2px);
+}
+
+.cancel-btn {
+    background: #f44336;
+    color: white;
+}
+
+.cancel-btn:hover {
+    background: #d32f2f;
+    transform: translateY(-2px);
+}
+
+/* 반응형 */
+@media (max-width: 768px) {
+    .toolbar {
+        height: 100px;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px;
+    }
+    
+    .canvas-container {
+        height: calc(100% - 100px);
+    }
+    
+    .note-editor-content {
+        width: 95%;
+        margin: 10px;
+    }
+    
+    .sticky-note {
+        width: 160px;
+        min-height: 160px;
+        font-size: 14px;
+    }
+}
+
+/* 커서 스타일 */
+.canvas-container.note-mode {
+    cursor: crosshair;
+}
+
+.canvas-container.move-mode {
+    cursor: grab;
+}
+
+.canvas-container.move-mode.grabbing {
+    cursor: grabbing;
+} 
