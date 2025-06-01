@@ -37,8 +37,12 @@ export default {
                 return handleAPI(request, env, url);
             }
             
-            // 정적 파일 서빙 (HTML, CSS, JS)
-            return handleStaticFiles(request, env, url);
+            // 정적 파일은 Cloudflare Pages가 처리하므로 여기서는 처리하지 않음
+            // 만약 여기까지 왔다면 404 반환
+            return new Response('Not Found', { 
+                status: 404,
+                headers: CORS_HEADERS
+            });
         } catch (error) {
             console.error('Worker 최상위 오류:', error);
             return new Response('Internal Server Error: ' + error.message, { 
@@ -158,6 +162,16 @@ async function handleWebSocketMessage(clientId, data, env) {
                 client.websocket.send(JSON.stringify({
                     type: 'notes_load',
                     notes: notes
+                }));
+                break;
+                
+            case 'sync_request':
+                // 실시간 동기화 요청
+                const syncNotes = await loadNotesFromR2(env);
+                client.websocket.send(JSON.stringify({
+                    type: 'sync_response',
+                    notes: syncNotes,
+                    timestamp: data.timestamp
                 }));
                 break;
                 
@@ -515,203 +529,7 @@ async function updateNoteInR2(env, noteId, x, y) {
     }
 }
 
-// 정적 파일 서빙
-async function handleStaticFiles(request, env, url) {
-    const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
-    
-    try {
-        // R2에서 정적 파일 로드 시도
-        if (env.STICKY_NOTES_BUCKET) {
-            try {
-                console.log(`R2에서 파일 로딩 시도: static${pathname}`);
-                const object = await env.STICKY_NOTES_BUCKET.get(`static${pathname}`);
-                
-                if (object) {
-                    console.log(`R2에서 파일 발견: static${pathname}`);
-                    const contentType = getContentType(pathname);
-                    return new Response(object.body, {
-                        headers: {
-                            'Content-Type': contentType,
-                            'Cache-Control': 'public, max-age=3600',
-                            ...CORS_HEADERS
-                        }
-                    });
-                } else {
-                    console.log(`R2에 파일 없음: static${pathname}`);
-                }
-            } catch (r2Error) {
-                console.warn('R2에서 파일 로드 실패:', r2Error.message);
-            }
-        }
-        
-        // 기본 응답 (개발용 또는 R2 설정 전)
-        if (pathname === '/index.html' || pathname === '/') {
-            return new Response(getDefaultHTML(), {
-                headers: {
-                    'Content-Type': 'text/html',
-                    ...CORS_HEADERS
-                }
-            });
-        }
-        
-        // CSS 파일 요청 시 기본 CSS 반환
-        if (pathname === '/styles.css') {
-            return new Response(getDefaultCSS(), {
-                headers: {
-                    'Content-Type': 'text/css',
-                    ...CORS_HEADERS
-                }
-            });
-        }
-        
-        // JS 파일 요청 시 기본 JS 반환
-        if (pathname === '/app.js') {
-            return new Response(getDefaultJS(), {
-                headers: {
-                    'Content-Type': 'application/javascript',
-                    ...CORS_HEADERS
-                }
-            });
-        }
-        
-        return new Response('File not found: ' + pathname, { 
-            status: 404,
-            headers: CORS_HEADERS
-        });
-        
-    } catch (error) {
-        console.error('정적 파일 서빙 오류:', error);
-        return new Response('Static file error: ' + error.message, { 
-            status: 500,
-            headers: CORS_HEADERS
-        });
-    }
-}
-
-// Content-Type 결정
-function getContentType(pathname) {
-    const ext = pathname.split('.').pop().toLowerCase();
-    const contentTypes = {
-        'html': 'text/html',
-        'css': 'text/css',
-        'js': 'application/javascript',
-        'json': 'application/json',
-        'png': 'image/png',
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'gif': 'image/gif',
-        'svg': 'image/svg+xml',
-        'ico': 'image/x-icon'
-    };
-    return contentTypes[ext] || 'text/plain';
-}
-
 // 클라이언트 ID 생성
 function generateClientId() {
     return 'client_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-}
-
-// 기본 HTML (개발용)
-function getDefaultHTML() {
-    return `<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Just Sticky Notes</title>
-    <link rel="stylesheet" href="styles.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Kalam:wght@300;400;700&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div class="container">
-        <h1>🗒️ Just Sticky Notes</h1>
-        <p>실시간 스티키 노트 커뮤니티에 오신 것을 환영합니다!</p>
-        <div class="note">
-            <p>Worker가 성공적으로 실행되고 있습니다!</p>
-            <p>R2 버킷을 설정하고 정적 파일을 업로드하면 완전한 앱을 사용할 수 있습니다.</p>
-        </div>
-        <p style="margin-top: 2rem; font-size: 0.9rem; opacity: 0.8;">
-            Cloudflare Workers + R2 + WebSocket
-        </p>
-        <div style="margin-top: 1rem;">
-            <a href="/api/debug" style="color: white; text-decoration: underline;">디버그 정보 보기</a>
-        </div>
-    </div>
-    <script src="app.js"></script>
-</body>
-</html>`;
-}
-
-// 기본 CSS (Fallback용)
-function getDefaultCSS() {
-    return `
-        body {
-            font-family: 'Kalam', cursive, Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .container {
-            text-align: center;
-            color: white;
-            padding: 2rem;
-            border-radius: 15px;
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-        }
-        h1 { margin-bottom: 1rem; }
-        p { margin-bottom: 2rem; }
-        .note {
-            background: #FFEB3B;
-            padding: 1rem;
-            border-radius: 5px;
-            color: #333;
-            display: inline-block;
-            transform: rotate(-2deg);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-            font-family: 'Caveat', cursive;
-            font-size: 18px;
-            max-width: 300px;
-        }
-    `;
-}
-
-// 기본 JS (Fallback용)
-function getDefaultJS() {
-    return `
-        console.log('Just Sticky Notes - Basic mode');
-        console.log('R2 버킷을 설정하고 정적 파일을 업로드하면 완전한 기능을 사용할 수 있습니다.');
-        
-        // 기본적인 WebSocket 연결 테스트
-        try {
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = protocol + '//' + location.host + '/ws';
-            const ws = new WebSocket(wsUrl);
-            
-            ws.onopen = () => {
-                console.log('WebSocket 연결 성공!');
-            };
-            
-            ws.onerror = (error) => {
-                console.log('WebSocket 연결 실패:', error);
-            };
-        } catch (error) {
-            console.log('WebSocket 테스트 오류:', error);
-        }
-        
-        // 디버그 정보 가져오기
-        fetch('/api/debug')
-            .then(response => response.json())
-            .then(data => {
-                console.log('디버그 정보:', data);
-            })
-            .catch(error => {
-                console.log('디버그 정보 로드 실패:', error);
-            });
-    `;
 } 

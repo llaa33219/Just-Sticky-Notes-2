@@ -18,6 +18,12 @@ let dragOffsetY = 0;
 let isDraggingNote = false;
 let lastUpdateTime = 0;
 let updateThrottle = 100; // 100ms 간격으로 업데이트 제한
+let currentNoteTool = 'text';
+let noteIsDrawing = false;
+let reconnectInterval = null;
+let heartbeatInterval = null;
+let isPageVisible = true;
+let connectionStatus = 'disconnected'; // 'connected', 'connecting', 'disconnected'
 
 // DOM 요소들
 const loginScreen = document.getElementById('login-screen');
@@ -52,15 +58,14 @@ const underlineToolBtn = document.getElementById('underline-tool');
 const circleToolBtn = document.getElementById('circle-tool');
 const clearAllBtn = document.getElementById('clear-all');
 
-let currentNoteTool = 'text';
-let noteIsDrawing = false;
-
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
     checkLoginStatus();
     setupEventListeners();
     setupCanvas();
     connectWebSocket();
+    setupVisibilityHandlers();
+    setupConnectionStatusIndicator();
 });
 
 // 로그인 상태 확인
@@ -94,8 +99,10 @@ function showApp() {
     // 캔버스 업데이트
     updateCanvasTransform();
     
-    // 스티키 노트 로드
-    loadStickyNotes();
+    // WebSocket이 이미 연결되어 있으면 동기화
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        syncWithServer();
+    }
 }
 
 // 이벤트 리스너 설정
@@ -581,8 +588,95 @@ function renderStickyNote(note) {
     canvas.appendChild(noteElement);
 }
 
+// 페이지 가시성 변경 처리
+function setupVisibilityHandlers() {
+    // 페이지 가시성 API
+    document.addEventListener('visibilitychange', () => {
+        isPageVisible = !document.hidden;
+        
+        if (isPageVisible && currentUser) {
+            // 페이지가 다시 보이면 동기화
+            console.log('페이지 활성화 - 동기화 시작');
+            syncWithServer();
+        }
+    });
+    
+    // 윈도우 포커스/블러 이벤트
+    window.addEventListener('focus', () => {
+        isPageVisible = true;
+        if (currentUser) {
+            console.log('윈도우 포커스 - 동기화 시작');
+            syncWithServer();
+        }
+    });
+    
+    window.addEventListener('blur', () => {
+        isPageVisible = false;
+    });
+}
+
+// 연결 상태 표시기 설정
+function setupConnectionStatusIndicator() {
+    const statusIndicator = document.createElement('div');
+    statusIndicator.id = 'connection-status';
+    statusIndicator.className = 'connection-status disconnected';
+    statusIndicator.innerHTML = '<span class="status-dot"></span><span class="status-text">연결 중...</span>';
+    document.body.appendChild(statusIndicator);
+}
+
+// 연결 상태 업데이트
+function updateConnectionStatus(status) {
+    connectionStatus = status;
+    const indicator = document.getElementById('connection-status');
+    if (!indicator) return;
+    
+    indicator.className = `connection-status ${status}`;
+    
+    switch (status) {
+        case 'connected':
+            indicator.innerHTML = '<span class="status-dot"></span><span class="status-text">실시간 연결됨</span>';
+            break;
+        case 'connecting':
+            indicator.innerHTML = '<span class="status-dot"></span><span class="status-text">연결 중...</span>';
+            break;
+        case 'disconnected':
+            indicator.innerHTML = '<span class="status-dot"></span><span class="status-text">연결 끊김</span>';
+            break;
+    }
+}
+
+// 서버와 동기화
+function syncWithServer() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        // 모든 노트 다시 로드
+        ws.send(JSON.stringify({
+            type: 'sync_request',
+            timestamp: Date.now()
+        }));
+    } else {
+        // WebSocket이 연결되어 있지 않으면 재연결 시도
+        connectWebSocket();
+    }
+}
+
 // WebSocket 연결
 function connectWebSocket() {
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+        return; // 이미 연결 중이거나 연결됨
+    }
+    
+    updateConnectionStatus('connecting');
+    
+    // 기존 간격 정리
+    if (reconnectInterval) {
+        clearInterval(reconnectInterval);
+        reconnectInterval = null;
+    }
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+    }
+    
     // Cloudflare Workers의 WebSocket 엔드포인트에 연결
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${location.host}/ws`;
@@ -591,6 +685,7 @@ function connectWebSocket() {
     
     ws.onopen = () => {
         console.log('WebSocket 연결됨');
+        updateConnectionStatus('connected');
         
         // 인증 메시지 전송
         if (currentUser) {
@@ -600,6 +695,9 @@ function connectWebSocket() {
                 user: currentUser
             }));
         }
+        
+        // 하트비트 시작
+        startHeartbeat();
     };
     
     ws.onmessage = (event) => {
@@ -617,14 +715,17 @@ function connectWebSocket() {
                 updateNotePosition(data.noteId, data.x, data.y);
                 break;
             case 'notes_load':
-                // 기존 노트들 로드 (중복 방지)
-                data.notes.forEach(note => addStickyNote(note));
+            case 'sync_response':
+                // 기존 노트들 로드 또는 동기화 응답
+                handleNotesSync(data.notes);
                 break;
             case 'user_joined':
                 console.log('새 사용자 접속:', data.user.name);
+                showNotification(`${data.user.name}님이 접속했습니다`, 'info');
                 break;
             case 'user_left':
                 console.log('사용자 퇴장:', data.user.name);
+                showNotification(`${data.user.name}님이 나갔습니다`, 'info');
                 break;
             case 'auth_success':
                 // 인증 성공 후 노트 로드 요청
@@ -632,27 +733,165 @@ function connectWebSocket() {
                     type: 'load_notes'
                 }));
                 break;
+            case 'pong':
+                // 하트비트 응답
+                console.log('Heartbeat: 연결 유지됨');
+                break;
         }
     };
     
-    ws.onclose = () => {
-        console.log('WebSocket 연결 끊김');
-        // 재연결 시도
-        setTimeout(connectWebSocket, 3000);
+    ws.onclose = (event) => {
+        console.log('WebSocket 연결 끊김:', event.code, event.reason);
+        updateConnectionStatus('disconnected');
+        
+        // 하트비트 중지
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
+        
+        // 자동 재연결 (3초 후)
+        if (!reconnectInterval) {
+            reconnectInterval = setInterval(() => {
+                if (currentUser && isPageVisible) {
+                    console.log('WebSocket 재연결 시도...');
+                    connectWebSocket();
+                }
+            }, 3000);
+        }
     };
     
     ws.onerror = (error) => {
         console.error('WebSocket 에러:', error);
+        updateConnectionStatus('disconnected');
     };
 }
 
-// 스티키 노트 로드
-function loadStickyNotes() {
-    // WebSocket을 통해 서버에서 기존 노트들을 요청
+// 하트비트 시작
+function startHeartbeat() {
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+    }
+    
+    heartbeatInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'ping',
+                timestamp: Date.now()
+            }));
+        }
+    }, 30000); // 30초마다 ping
+}
+
+// 노트 동기화 처리
+function handleNotesSync(notes) {
+    // 기존 노트들과 비교하여 변경사항만 적용
+    const existingNoteIds = new Set(stickyNotes.map(n => n.id));
+    const newNoteIds = new Set(notes.map(n => n.id));
+    
+    // 삭제된 노트 제거
+    stickyNotes.forEach(note => {
+        if (!newNoteIds.has(note.id)) {
+            removeNoteFromDOM(note.id);
+        }
+    });
+    
+    // 새로운 노트들 추가/업데이트
+    notes.forEach(note => {
+        if (!existingNoteIds.has(note.id)) {
+            // 새 노트 추가
+            addStickyNote(note);
+        } else {
+            // 기존 노트 업데이트 (위치 등)
+            updateExistingNote(note);
+        }
+    });
+    
+    console.log(`동기화 완료: ${notes.length}개 노트`);
+}
+
+// 기존 노트 업데이트
+function updateExistingNote(newNote) {
+    const existingNote = stickyNotes.find(n => n.id === newNote.id);
+    if (!existingNote) return;
+    
+    // 위치나 내용이 변경되었는지 확인
+    if (existingNote.x !== newNote.x || existingNote.y !== newNote.y) {
+        updateNotePosition(newNote.id, newNote.x, newNote.y);
+    }
+    
+    // 다른 속성들도 업데이트
+    Object.assign(existingNote, newNote);
+}
+
+// DOM에서 노트 제거
+function removeNoteFromDOM(noteId) {
+    const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
+    if (noteElement) {
+        noteElement.remove();
+    }
+    
+    // 배열에서도 제거
+    const index = stickyNotes.findIndex(n => n.id === noteId);
+    if (index !== -1) {
+        stickyNotes.splice(index, 1);
+    }
+}
+
+// 알림 표시
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    
+    document.body.appendChild(notification);
+    
+    // 3초 후 제거
+    setTimeout(() => {
+        notification.classList.add('fade-out');
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 300);
+    }, 3000);
+}
+
+// 노트 위치 업데이트 전송
+function sendNoteUpdate(note) {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
-            type: 'load_notes'
+            type: 'update_note',
+            noteId: note.id,
+            x: note.x,
+            y: note.y
         }));
+    }
+}
+
+// 노트 위치 업데이트 (다른 사용자의 노트 이동 반영)
+function updateNotePosition(noteId, x, y) {
+    // 로컬 데이터 업데이트
+    const note = stickyNotes.find(n => n.id === noteId);
+    if (note) {
+        note.x = x;
+        note.y = y;
+    }
+    
+    // DOM 요소 업데이트 (현재 드래그 중인 노트가 아닌 경우에만)
+    if (!isDraggingNote || (draggedNote && draggedNote.dataset.noteId !== noteId)) {
+        const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
+        if (noteElement) {
+            // 부드러운 애니메이션으로 위치 이동
+            noteElement.style.transition = 'left 0.3s ease, top 0.3s ease';
+            noteElement.style.left = x + 'px';
+            noteElement.style.top = y + 'px';
+            
+            // 애니메이션 후 원래 transition으로 복원
+            setTimeout(() => {
+                noteElement.style.transition = 'all 0.2s ease';
+            }, 300);
+        }
     }
 }
 
@@ -728,42 +967,4 @@ function setupUnifiedCanvas() {
     unifiedCanvas.addEventListener('mousemove', draw);
     unifiedCanvas.addEventListener('mouseup', stopDrawing);
     unifiedCanvas.addEventListener('mouseout', stopDrawing);
-}
-
-// 노트 위치 업데이트 전송
-function sendNoteUpdate(note) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-            type: 'update_note',
-            noteId: note.id,
-            x: note.x,
-            y: note.y
-        }));
-    }
-}
-
-// 노트 위치 업데이트 (다른 사용자의 노트 이동 반영)
-function updateNotePosition(noteId, x, y) {
-    // 로컬 데이터 업데이트
-    const note = stickyNotes.find(n => n.id === noteId);
-    if (note) {
-        note.x = x;
-        note.y = y;
-    }
-    
-    // DOM 요소 업데이트 (현재 드래그 중인 노트가 아닌 경우에만)
-    if (!isDraggingNote || (draggedNote && draggedNote.dataset.noteId !== noteId)) {
-        const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
-        if (noteElement) {
-            // 부드러운 애니메이션으로 위치 이동
-            noteElement.style.transition = 'left 0.3s ease, top 0.3s ease';
-            noteElement.style.left = x + 'px';
-            noteElement.style.top = y + 'px';
-            
-            // 애니메이션 후 원래 transition으로 복원
-            setTimeout(() => {
-                noteElement.style.transition = 'all 0.2s ease';
-            }, 300);
-        }
-    }
 } 
