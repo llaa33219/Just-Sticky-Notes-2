@@ -777,7 +777,7 @@ function connectWebSocket() {
             console.log(`📥 메시지 수신 지연시간: ${latency}ms (평균: ${Math.round(latencyMonitor.averageLatency)}ms)`);
         }
         
-        switch (data.type) {
+        switch (data.type || data.t) {
             case 'note_created':
                 // 서버에서 노트 생성 완료 - 모든 사용자에게 추가
                 console.log(`📝 새 노트 생성됨: ${data.note.id}`);
@@ -793,10 +793,16 @@ function connectWebSocket() {
                 }
                 break;
             case 'note_updated':
+            case 'u': // 축약형 지원
                 // 노트 위치 업데이트 - 즉시 반영
-                const updateLatency = receiveTimestamp - (data.timestamp || 0);
-                console.log(`🔄 노트 위치 업데이트: ${data.noteId} (지연: ${updateLatency}ms)`);
-                updateNotePositionImmediate(data.noteId, data.x, data.y, data.clientId);
+                const updateLatency = receiveTimestamp - (data.timestamp || data.ts || 0);
+                const noteId = data.noteId || data.id;
+                const x = data.x;
+                const y = data.y;
+                const clientId = data.clientId || data.c;
+                
+                console.log(`🔄 ${noteId}: ${updateLatency}ms`);
+                updateNotePositionImmediate(noteId, x, y, clientId);
                 break;
             case 'notes_load':
             case 'sync_response':
@@ -985,30 +991,10 @@ function updateNotePosition(noteId, x, y) {
     }
 }
 
-// 즉시 전송 함수 (지연시간 모니터링 포함)
-function sendNoteUpdateImmediate(note) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        const timestamp = Date.now();
-        latencyMonitor.lastSent = timestamp;
-        
-        ws.send(JSON.stringify({
-            type: 'update_note',
-            noteId: note.id,
-            x: note.x,
-            y: note.y,
-            timestamp: timestamp,
-            clientId: 'client_' + currentUser.id
-        }));
-        
-        // 지연시간 디버깅
-        console.log(`📤 노트 업데이트 전송: ${note.id} (${note.x}, ${note.y}) at ${timestamp}`);
-    }
-}
-
 // 즉시 위치 업데이트 함수
 function updateNotePositionImmediate(noteId, x, y, clientId) {
     // 자신이 보낸 업데이트는 무시 (이미 로컬에서 처리됨)
-    if (clientId === 'client_' + currentUser.id) {
+    if (clientId === currentUser.id) {
         return;
     }
     
@@ -1019,18 +1005,13 @@ function updateNotePositionImmediate(noteId, x, y, clientId) {
         note.y = y;
     }
     
-    // DOM 요소 즉시 업데이트
-    const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
-    if (noteElement && (!isDraggingNote || draggedNote.dataset.noteId !== noteId)) {
-        // 즉시 위치 변경 (애니메이션 없음)
-        noteElement.style.transition = 'none';
-        noteElement.style.left = x + 'px';
-        noteElement.style.top = y + 'px';
-        
-        // 다음 프레임에서 transition 복원
-        requestAnimationFrame(() => {
-            noteElement.style.transition = 'all 0.1s ease';
-        });
+    // DOM 요소 즉시 업데이트 (현재 드래그 중이 아닌 경우에만)
+    if (!isDraggingNote || draggedNote.dataset.noteId !== noteId) {
+        const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
+        if (noteElement) {
+            // 즉시 위치 변경 (애니메이션 없음) - 최대 성능
+            noteElement.style.transform = `translate(${x}px, ${y}px)`;
+        }
     }
 }
 
@@ -1165,5 +1146,26 @@ function updateLatencyDisplay() {
             (ws.readyState === WebSocket.OPEN ? '✅ 연결됨' : 
              ws.readyState === WebSocket.CONNECTING ? '🟡 연결 중...' : '❌ 끊김') : 
             '❌ 없음';
+    }
+}
+
+// 초경량 즉시 전송 함수 (최소 데이터만 전송)
+function sendNoteUpdateImmediate(note) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const timestamp = Date.now();
+        latencyMonitor.lastSent = timestamp;
+        
+        // 최소한의 데이터만 전송하여 네트워크 부하 감소
+        ws.send(JSON.stringify({
+            t: 'u', // type: 'update_note' 축약
+            id: note.id,
+            x: Math.round(note.x), // 소수점 제거
+            y: Math.round(note.y), // 소수점 제거
+            ts: timestamp,
+            c: currentUser.id // clientId 축약
+        }));
+        
+        // 지연시간 디버깅
+        console.log(`📤 ${timestamp}: (${Math.round(note.x)}, ${Math.round(note.y)})`);
     }
 } 

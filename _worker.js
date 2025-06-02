@@ -133,7 +133,7 @@ async function handleWebSocketMessage(clientId, data, env) {
     if (!client) return;
     
     try {
-        switch (data.type) {
+        switch (data.type || data.t) { // 축약형 메시지도 지원
             case 'auth':
                 // 사용자 인증
                 client.user = data.user;
@@ -201,21 +201,29 @@ async function handleWebSocketMessage(clientId, data, env) {
                 break;
                 
             case 'update_note':
-                // 스티키 노트 위치 업데이트 - 절대 우선순위로 즉시 브로드캐스트
-                const updateMessage = {
-                    type: 'note_updated',
-                    noteId: data.noteId,
-                    x: data.x,
-                    y: data.y,
-                    timestamp: data.timestamp, // 원본 타임스탬프 유지
-                    clientId: data.clientId
+            case 'u': // 축약형 메시지 처리 (초고속)
+                // 축약형과 일반형 모두 지원
+                const noteId = data.noteId || data.id;
+                const x = data.x;
+                const y = data.y;
+                const timestamp = data.timestamp || data.ts;
+                const sendingClientId = data.clientId || data.c;
+                
+                // 초경량 메시지로 즉시 브로드캐스트
+                const ultraFastMessage = {
+                    t: 'u', // 축약형 응답
+                    id: noteId,
+                    x: x,
+                    y: y,
+                    ts: timestamp,
+                    c: sendingClientId
                 };
                 
-                // 즉시 브로드캐스트 (어떤 것도 이를 블로킹하지 않음)
-                broadcastMessage(updateMessage, clientId);
+                // 즉시 브로드캐스트 (최고 우선순위)
+                broadcastMessageUltraFast(ultraFastMessage, clientId);
                 
                 // R2 업데이트를 별도 큐에서 처리
-                queueR2Operation(() => updateNoteInR2(env, data.noteId, data.x, data.y));
+                queueR2Operation(() => updateNoteInR2(env, noteId, x, y));
                 break;
                 
             case 'ping':
@@ -231,7 +239,7 @@ async function handleWebSocketMessage(clientId, data, env) {
                 break;
                 
             default:
-                console.log('알 수 없는 메시지 타입:', data.type);
+                console.log('알 수 없는 메시지 타입:', data.type || data.t);
         }
     } catch (error) {
         console.error('메시지 처리 중 오류:', error);
@@ -360,6 +368,27 @@ function broadcastMessage(message, excludeClientId = null) {
         
     } catch (error) {
         console.error('브로드캐스트 전체 오류:', error);
+    }
+}
+
+// 초고속 브로드캐스트 (최소 지연시간을 위한 최적화)
+function broadcastMessageUltraFast(message, excludeClientId = null) {
+    try {
+        const messageStr = JSON.stringify(message);
+        
+        // 동기적으로 즉시 전송 (Promise 없이)
+        for (const [clientId, client] of connectedClients) {
+            if (clientId !== excludeClientId && client.websocket && client.websocket.readyState === 1) {
+                try {
+                    client.websocket.send(messageStr);
+                } catch (error) {
+                    console.error('초고속 브로드캐스트 오류:', error);
+                    connectedClients.delete(clientId);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('초고속 브로드캐스트 전체 오류:', error);
     }
 }
 
