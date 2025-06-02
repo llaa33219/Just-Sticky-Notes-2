@@ -223,7 +223,10 @@ body {
     color: #333;
     padding: 20px 15px 15px;
     overflow: hidden;
+    /* GPU 가속을 위한 최적화 */
     will-change: transform, left, top;
+    transform: translateZ(0); /* GPU 레이어 강제 생성 */
+    backface-visibility: hidden; /* 뒷면 렌더링 방지 */
     /* transition은 JavaScript에서 동적으로 제어 */
     animation: appearNote 0.5s ease-out;
 }

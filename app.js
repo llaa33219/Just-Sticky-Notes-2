@@ -17,7 +17,7 @@ let dragOffsetX = 0;
 let dragOffsetY = 0;
 let isDraggingNote = false;
 let lastUpdateTime = 0;
-let updateThrottle = 100; // 100ms 간격으로 업데이트 제한
+let updateThrottle = 25; // 25ms 간격으로 초고속 실시간 업데이트
 let currentNoteTool = 'text';
 let noteIsDrawing = false;
 let reconnectInterval = null;
@@ -292,21 +292,31 @@ function handleCanvasMouseDown(e) {
 
 function handleCanvasMouseMove(e) {
     if (isDraggingNote && draggedNote) {
-        // 스티키 노트 드래그 - 로컬에서만 위치 업데이트 (서버는 드래그 완료 시)
-        const rect = canvasContainer.getBoundingClientRect();
-        const newX = (e.clientX - rect.left - panX) / zoomLevel - dragOffsetX;
-        const newY = (e.clientY - rect.top - panY) / zoomLevel - dragOffsetY;
-        
-        draggedNote.style.left = newX + 'px';
-        draggedNote.style.top = newY + 'px';
-        
-        // 로컬 데이터만 업데이트 (서버 전송은 드래그 완료 시)
-        const noteId = draggedNote.dataset.noteId;
-        const note = stickyNotes.find(n => n.id === noteId);
-        if (note) {
-            note.x = newX;
-            note.y = newY;
-        }
+        // 스티키 노트 드래그 - 실시간으로 서버에 업데이트
+        requestAnimationFrame(() => {
+            const rect = canvasContainer.getBoundingClientRect();
+            const newX = (e.clientX - rect.left - panX) / zoomLevel - dragOffsetX;
+            const newY = (e.clientY - rect.top - panY) / zoomLevel - dragOffsetY;
+            
+            // 즉시 로컬 UI 업데이트
+            draggedNote.style.left = newX + 'px';
+            draggedNote.style.top = newY + 'px';
+            
+            // 로컬 데이터 업데이트
+            const noteId = draggedNote.dataset.noteId;
+            const note = stickyNotes.find(n => n.id === noteId);
+            if (note) {
+                note.x = newX;
+                note.y = newY;
+                
+                // 실시간 서버 업데이트 (throttled)
+                const now = Date.now();
+                if (now - lastUpdateTime > updateThrottle) {
+                    sendNoteUpdate(note);
+                    lastUpdateTime = now;
+                }
+            }
+        });
         
     } else if (isDragging && currentTool === 'move') {
         // 캔버스 패닝 - requestAnimationFrame으로 최적화
@@ -331,7 +341,7 @@ function handleCanvasMouseUp(e) {
         draggedNote.style.transition = 'all 0.2s ease';
         draggedNote.style.zIndex = '';
         
-        // 최종 위치 업데이트 전송
+        // 최종 위치 업데이트 전송 (확실하게)
         const noteId = draggedNote.dataset.noteId;
         const note = stickyNotes.find(n => n.id === noteId);
         if (note) {
@@ -340,6 +350,7 @@ function handleCanvasMouseUp(e) {
         
         isDraggingNote = false;
         draggedNote = null;
+        lastUpdateTime = 0; // throttle 초기화
     } else {
         isDragging = false;
         canvasContainer.style.cursor = '';
@@ -782,7 +793,7 @@ function startHeartbeat() {
                 timestamp: Date.now()
             }));
         }
-    }, 30000); // 30초마다 ping
+    }, 15000); // 15초마다 ping (더 자주 연결 확인)
 }
 
 // 노트 동기화 처리
@@ -884,15 +895,17 @@ function updateNotePosition(noteId, x, y) {
     if (!isDraggingNote || (draggedNote && draggedNote.dataset.noteId !== noteId)) {
         const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
         if (noteElement) {
-            // 부드러운 애니메이션으로 위치 이동
-            noteElement.style.transition = 'left 0.3s ease, top 0.3s ease';
+            // 매우 부드러운 실시간 애니메이션
+            noteElement.style.transition = 'left 0.1s ease-out, top 0.1s ease-out';
             noteElement.style.left = x + 'px';
             noteElement.style.top = y + 'px';
             
-            // 애니메이션 후 원래 transition으로 복원
+            // 짧은 시간 후 원래 transition으로 복원
             setTimeout(() => {
-                noteElement.style.transition = 'all 0.2s ease';
-            }, 300);
+                if (noteElement.style.transition.includes('0.1s')) {
+                    noteElement.style.transition = 'all 0.2s ease';
+                }
+            }, 100);
         }
     }
 }

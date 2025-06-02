@@ -200,14 +200,19 @@ async function handleWebSocketMessage(clientId, data, env) {
                 break;
                 
             case 'update_note':
-                // 스티키 노트 위치 업데이트
-                broadcastMessage({
+                // 스티키 노트 위치 업데이트 - 즉시 브로드캐스트
+                const updateMessage = {
                     type: 'note_updated',
                     noteId: data.noteId,
                     x: data.x,
-                    y: data.y
-                }, clientId);
+                    y: data.y,
+                    timestamp: Date.now()
+                };
                 
+                // 즉시 모든 클라이언트에게 브로드캐스트 (최고 우선순위)
+                broadcastMessage(updateMessage, clientId);
+                
+                // R2 업데이트는 비동기로 처리 (브로드캐스트 이후)
                 updateNoteInR2(env, data.noteId, data.x, data.y).catch(error => {
                     console.error('R2 업데이트 오류:', error);
                 });
@@ -217,7 +222,8 @@ async function handleWebSocketMessage(clientId, data, env) {
                 // 연결 상태 확인
                 client.lastSeen = Date.now();
                 client.websocket.send(JSON.stringify({
-                    type: 'pong'
+                    type: 'pong',
+                    timestamp: Date.now()
                 }));
                 
                 // 이 시점에서 비활성 클라이언트 정리
@@ -264,24 +270,36 @@ function cleanupInactiveClients() {
     }
 }
 
-// 모든 클라이언트에게 메시지 브로드캐스트
+// 모든 클라이언트에게 메시지 브로드캐스트 (최적화된 버전)
 function broadcastMessage(message, excludeClientId = null) {
     try {
         const messageStr = JSON.stringify(message);
+        const broadcastPromises = [];
         
         for (const [clientId, client] of connectedClients) {
             if (clientId !== excludeClientId) {
-                try {
-                    // WebSocket 상태 확인을 더 안전하게
-                    if (client.websocket && client.websocket.readyState === 1) { // OPEN
-                        client.websocket.send(messageStr);
+                // 각 클라이언트에게 병렬로 전송
+                const sendPromise = new Promise((resolve) => {
+                    try {
+                        if (client.websocket && client.websocket.readyState === 1) { // OPEN
+                            client.websocket.send(messageStr);
+                        }
+                        resolve();
+                    } catch (error) {
+                        console.error('브로드캐스트 오류:', error);
+                        connectedClients.delete(clientId);
+                        resolve();
                     }
-                } catch (error) {
-                    console.error('브로드캐스트 오류:', error);
-                    connectedClients.delete(clientId);
-                }
+                });
+                broadcastPromises.push(sendPromise);
             }
         }
+        
+        // 모든 전송을 병렬로 처리하여 속도 향상
+        Promise.all(broadcastPromises).catch(error => {
+            console.error('브로드캐스트 병렬 처리 오류:', error);
+        });
+        
     } catch (error) {
         console.error('브로드캐스트 전체 오류:', error);
     }
