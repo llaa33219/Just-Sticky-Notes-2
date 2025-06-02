@@ -11,6 +11,11 @@ const CORS_HEADERS = {
 // 연결된 WebSocket 클라이언트들을 저장할 Map
 let connectedClients = new Map();
 
+// 성능 최적화를 위한 설정
+const BATCH_SIZE = 50; // R2 배치 처리 크기
+const DEBOUNCE_TIME = 100; // 위치 업데이트 디바운싱 시간 (ms)
+const MAX_QUEUE_SIZE = 1000; // 최대 큐 크기
+
 export default {
     async fetch(request, env, ctx) {
         try {
@@ -85,35 +90,56 @@ function handleWebSocketConnection(websocket, env) {
     connectedClients.set(clientId, {
         websocket: websocket,
         user: null,
-        lastSeen: Date.now()
+        lastSeen: Date.now(),
+        isAlive: true
     });
+    
+    // 연결 즉시 핑 설정 (30초마다)
+    const pingInterval = setInterval(() => {
+        try {
+            if (websocket.readyState === 1) {
+                websocket.ping();
+            } else {
+                clearInterval(pingInterval);
+                connectedClients.delete(clientId);
+            }
+        } catch (error) {
+            clearInterval(pingInterval);
+            connectedClients.delete(clientId);
+        }
+    }, 30000);
     
     websocket.addEventListener('message', async (event) => {
         try {
+            const client = connectedClients.get(clientId);
+            if (!client) return;
+            
+            client.lastSeen = Date.now();
+            client.isAlive = true;
+            
             const data = JSON.parse(event.data);
-            await handleWebSocketMessage(clientId, data, env);
+            await handleWebSocketMessageOptimized(clientId, data, env);
         } catch (error) {
             console.error('WebSocket 메시지 처리 오류:', error);
-            try {
-                websocket.send(JSON.stringify({
-                    type: 'error',
-                    message: '메시지 처리 중 오류가 발생했습니다.'
-                }));
-            } catch (sendError) {
-                console.error('에러 메시지 전송 실패:', sendError);
-            }
+            safelySendMessage(clientId, {
+                type: 'error',
+                message: '메시지 처리 중 오류가 발생했습니다.'
+            });
         }
     });
     
     websocket.addEventListener('close', () => {
         try {
+            clearInterval(pingInterval);
             const client = connectedClients.get(clientId);
             if (client && client.user) {
-                // 다른 클라이언트들에게 사용자 퇴장 알림
-                broadcastMessage({
-                    type: 'user_left',
-                    user: client.user
-                }, clientId);
+                // 즉시 브로드캐스트 (논블로킹)
+                setImmediate(() => {
+                    broadcastMessageInstant({
+                        type: 'user_left',
+                        user: client.user
+                    }, clientId);
+                });
             }
             connectedClients.delete(clientId);
         } catch (error) {
@@ -123,277 +149,415 @@ function handleWebSocketConnection(websocket, env) {
     
     websocket.addEventListener('error', (error) => {
         console.error('WebSocket 오류:', error);
+        clearInterval(pingInterval);
         connectedClients.delete(clientId);
+    });
+    
+    websocket.addEventListener('pong', () => {
+        const client = connectedClients.get(clientId);
+        if (client) {
+            client.isAlive = true;
+            client.lastSeen = Date.now();
+        }
     });
 }
 
-// WebSocket 메시지 처리
-async function handleWebSocketMessage(clientId, data, env) {
+// 최적화된 WebSocket 메시지 처리
+async function handleWebSocketMessageOptimized(clientId, data, env) {
     const client = connectedClients.get(clientId);
     if (!client) return;
     
+    const messageType = data.type || data.t;
+    const timestamp = Date.now();
+    
     try {
-        switch (data.type || data.t) { // 축약형 메시지도 지원
+        switch (messageType) {
             case 'auth':
-                // 사용자 인증
+                // 사용자 인증 - 즉시 처리
                 client.user = data.user;
-                client.lastSeen = Date.now();
                 
-                // 다른 클라이언트들에게 새 사용자 접속 알림
-                broadcastMessage({
+                // 즉시 브로드캐스트
+                broadcastMessageInstant({
                     type: 'user_joined',
                     user: data.user
                 }, clientId);
                 
-                // 인증 성공 응답
-                client.websocket.send(JSON.stringify({
+                // 즉시 응답
+                safelySendMessage(clientId, {
                     type: 'auth_success',
                     user: data.user,
-                    timestamp: Date.now()
-                }));
+                    timestamp: timestamp
+                });
                 break;
                 
             case 'load_notes':
-                // 기존 스티키 노트들 로드
-                const notes = await loadNotesFromR2(env);
-                client.websocket.send(JSON.stringify({
-                    type: 'notes_load',
-                    notes: notes,
-                    timestamp: Date.now()
-                }));
+                // 비동기로 노트 로드 (브로드캐스트 차단 안함)
+                loadNotesAsync(env, clientId);
                 break;
                 
             case 'sync_request':
-                // 실시간 동기화 요청
-                const syncNotes = await loadNotesFromR2(env);
-                client.websocket.send(JSON.stringify({
-                    type: 'sync_response',
-                    notes: syncNotes,
-                    timestamp: data.timestamp
-                }));
+                // 비동기로 동기화 (브로드캐스트 차단 안함)
+                syncNotesAsync(env, clientId, data.timestamp);
                 break;
                 
             case 'create_note':
-                // 새 스티키 노트 생성
+                // 최고 우선순위: 즉시 브로드캐스트
                 const note = data.note;
+                note.timestamp = timestamp;
                 
-                // 즉시 모든 클라이언트에게 브로드캐스트 (최고 우선순위)
-                broadcastMessage({
+                broadcastMessageInstant({
                     type: 'note_created',
                     note: note,
-                    timestamp: Date.now()
+                    timestamp: timestamp
                 });
                 
-                // R2 저장을 백그라운드에서 처리 (절대 브로드캐스트 블로킹 안함)
-                queueR2Operation(() => saveNoteToR2(env, note));
+                // R2 저장은 배치로 처리
+                queueR2OperationBatch({
+                    type: 'create',
+                    note: note
+                });
                 break;
                 
             case 'delete_note':
-                // 스티키 노트 삭제
-                broadcastMessage({
+                // 즉시 브로드캐스트
+                broadcastMessageInstant({
                     type: 'note_deleted',
                     noteId: data.noteId,
-                    timestamp: Date.now()
+                    timestamp: timestamp
                 });
                 
-                // R2 삭제를 백그라운드에서 처리
-                queueR2Operation(() => deleteNoteFromR2(env, data.noteId));
+                // R2 삭제는 배치로 처리
+                queueR2OperationBatch({
+                    type: 'delete',
+                    noteId: data.noteId
+                });
                 break;
                 
             case 'update_note':
-            case 'u': // 축약형 메시지 처리 (초고속)
-                // 축약형과 일반형 모두 지원
+            case 'u': // 초고속 위치 업데이트
                 const noteId = data.noteId || data.id;
                 const x = data.x;
                 const y = data.y;
-                const timestamp = data.timestamp || data.ts;
+                const msgTimestamp = data.timestamp || data.ts || timestamp;
                 const sendingClientId = data.clientId || data.c;
                 
                 // 초경량 메시지로 즉시 브로드캐스트
-                const ultraFastMessage = {
-                    t: 'u', // 축약형 응답
+                broadcastMessageInstant({
+                    t: 'u',
                     id: noteId,
                     x: x,
                     y: y,
-                    ts: timestamp,
+                    ts: msgTimestamp,
                     c: sendingClientId
-                };
+                }, clientId);
                 
-                // 즉시 브로드캐스트 (최고 우선순위)
-                broadcastMessageUltraFast(ultraFastMessage, clientId);
-                
-                // R2 업데이트를 별도 큐에서 처리
-                queueR2Operation(() => updateNoteInR2(env, noteId, x, y));
+                // 위치 업데이트는 디바운싱으로 처리
+                debouncedUpdateNote(noteId, x, y, env);
                 break;
                 
             case 'ping':
-                // 연결 상태 확인
-                client.lastSeen = Date.now();
-                client.websocket.send(JSON.stringify({
+                // 즉시 응답
+                client.lastSeen = timestamp;
+                client.isAlive = true;
+                safelySendMessage(clientId, {
                     type: 'pong',
-                    timestamp: data.timestamp
-                }));
-                
-                // 비활성 클라이언트 정리도 백그라운드에서
-                queueBackgroundTask(() => cleanupInactiveClients());
+                    timestamp: data.timestamp || timestamp
+                });
                 break;
                 
             default:
-                console.log('알 수 없는 메시지 타입:', data.type || data.t);
+                console.log('알 수 없는 메시지 타입:', messageType);
         }
     } catch (error) {
         console.error('메시지 처리 중 오류:', error);
-        // 에러 발생 시 클라이언트에게 알림
-        try {
-            client.websocket.send(JSON.stringify({
-                type: 'error',
-                message: '요청 처리 중 오류가 발생했습니다.',
-                timestamp: Date.now()
-            }));
-        } catch (sendError) {
-            console.error('에러 알림 전송 실패:', sendError);
-        }
+        safelySendMessage(clientId, {
+            type: 'error',
+            message: '요청 처리 중 오류가 발생했습니다.',
+            timestamp: timestamp
+        });
     }
 }
 
-// R2 작업 큐 (브로드캐스트와 완전 분리)
-const r2OperationQueue = [];
-let isProcessingR2Queue = false;
-
-function queueR2Operation(operation) {
-    r2OperationQueue.push(operation);
-    processR2Queue(); // 비동기로 처리
-}
-
-async function processR2Queue() {
-    if (isProcessingR2Queue || r2OperationQueue.length === 0) {
-        return;
-    }
-    
-    isProcessingR2Queue = true;
-    
-    while (r2OperationQueue.length > 0) {
-        const operation = r2OperationQueue.shift();
-        try {
-            await operation();
-        } catch (error) {
-            console.error('R2 작업 처리 오류:', error);
-            // R2 오류가 있어도 계속 진행
-        }
-    }
-    
-    isProcessingR2Queue = false;
-}
-
-// 백그라운드 작업 큐
-const backgroundTaskQueue = [];
-let isProcessingBackgroundTasks = false;
-
-function queueBackgroundTask(task) {
-    backgroundTaskQueue.push(task);
-    processBackgroundTasks();
-}
-
-async function processBackgroundTasks() {
-    if (isProcessingBackgroundTasks || backgroundTaskQueue.length === 0) {
-        return;
-    }
-    
-    isProcessingBackgroundTasks = true;
-    
-    while (backgroundTaskQueue.length > 0) {
-        const task = backgroundTaskQueue.shift();
-        try {
-            await task();
-        } catch (error) {
-            console.error('백그라운드 작업 오류:', error);
-        }
-    }
-    
-    isProcessingBackgroundTasks = false;
-}
-
-// 비활성 클라이언트 정리 함수
-function cleanupInactiveClients() {
+// 안전한 메시지 전송
+function safelySendMessage(clientId, message) {
     try {
-        const now = Date.now();
-        const inactiveThreshold = 30 * 60 * 1000; // 30분
-        
-        for (const [clientId, client] of connectedClients) {
-            if (now - client.lastSeen > inactiveThreshold) {
-                try {
-                    if (client.websocket && client.websocket.readyState === 1) {
-                        client.websocket.close();
-                    }
-                } catch (error) {
-                    console.error('클라이언트 정리 오류:', error);
-                }
-                connectedClients.delete(clientId);
-            }
+        const client = connectedClients.get(clientId);
+        if (client && client.websocket && client.websocket.readyState === 1) {
+            client.websocket.send(JSON.stringify(message));
+            return true;
         }
+        return false;
     } catch (error) {
-        console.error('클라이언트 정리 중 오류:', error);
+        console.error('메시지 전송 오류:', error);
+        connectedClients.delete(clientId);
+        return false;
     }
 }
 
-// 모든 클라이언트에게 메시지 브로드캐스트 (최적화된 버전)
-function broadcastMessage(message, excludeClientId = null) {
+// 즉시 브로드캐스트 (절대 블로킹 없음)
+function broadcastMessageInstant(message, excludeClientId = null) {
     try {
         const messageStr = JSON.stringify(message);
-        const broadcastPromises = [];
+        const clientsToRemove = [];
         
+        // 동기적으로 모든 활성 클라이언트에게 즉시 전송
         for (const [clientId, client] of connectedClients) {
             if (clientId !== excludeClientId) {
-                // 각 클라이언트에게 병렬로 전송
-                const sendPromise = new Promise((resolve) => {
-                    try {
-                        if (client.websocket && client.websocket.readyState === 1) { // OPEN
-                            client.websocket.send(messageStr);
-                        }
-                        resolve();
-                    } catch (error) {
-                        console.error('브로드캐스트 오류:', error);
-                        connectedClients.delete(clientId);
-                        resolve();
+                try {
+                    if (client.websocket && client.websocket.readyState === 1) {
+                        client.websocket.send(messageStr);
+                    } else {
+                        clientsToRemove.push(clientId);
                     }
-                });
-                broadcastPromises.push(sendPromise);
+                } catch (error) {
+                    console.error('브로드캐스트 개별 전송 오류:', error);
+                    clientsToRemove.push(clientId);
+                }
             }
         }
         
-        // 모든 전송을 병렬로 처리하여 속도 향상
-        Promise.all(broadcastPromises).catch(error => {
-            console.error('브로드캐스트 병렬 처리 오류:', error);
-        });
+        // 실패한 클라이언트들 제거 (비동기)
+        if (clientsToRemove.length > 0) {
+            setImmediate(() => {
+                clientsToRemove.forEach(clientId => {
+                    connectedClients.delete(clientId);
+                });
+            });
+        }
         
     } catch (error) {
         console.error('브로드캐스트 전체 오류:', error);
     }
 }
 
-// 초고속 브로드캐스트 (최소 지연시간을 위한 최적화)
-function broadcastMessageUltraFast(message, excludeClientId = null) {
+// 비동기 노트 로드
+async function loadNotesAsync(env, clientId) {
     try {
-        const messageStr = JSON.stringify(message);
-        
-        // 동기적으로 즉시 전송 (Promise 없이)
-        for (const [clientId, client] of connectedClients) {
-            if (clientId !== excludeClientId && client.websocket && client.websocket.readyState === 1) {
-                try {
-                    client.websocket.send(messageStr);
-                } catch (error) {
-                    console.error('초고속 브로드캐스트 오류:', error);
-                    connectedClients.delete(clientId);
-                }
-            }
-        }
+        const notes = await loadNotesFromR2(env);
+        safelySendMessage(clientId, {
+            type: 'notes_load',
+            notes: notes,
+            timestamp: Date.now()
+        });
     } catch (error) {
-        console.error('초고속 브로드캐스트 전체 오류:', error);
+        console.error('비동기 노트 로드 오류:', error);
+        safelySendMessage(clientId, {
+            type: 'error',
+            message: '노트 로드 중 오류가 발생했습니다.'
+        });
     }
 }
 
+// 비동기 노트 동기화
+async function syncNotesAsync(env, clientId, requestTimestamp) {
+    try {
+        const notes = await loadNotesFromR2(env);
+        safelySendMessage(clientId, {
+            type: 'sync_response',
+            notes: notes,
+            timestamp: requestTimestamp
+        });
+    } catch (error) {
+        console.error('비동기 동기화 오류:', error);
+        safelySendMessage(clientId, {
+            type: 'error',
+            message: '동기화 중 오류가 발생했습니다.'
+        });
+    }
+}
+
+// R2 배치 작업 시스템
+const r2BatchQueue = [];
+const r2DebounceMap = new Map(); // 위치 업데이트 디바운싱용
+let isBatchProcessing = false;
+
+function queueR2OperationBatch(operation) {
+    if (r2BatchQueue.length < MAX_QUEUE_SIZE) {
+        r2BatchQueue.push({
+            ...operation,
+            timestamp: Date.now()
+        });
+        
+        // 배치 처리 스케줄링
+        if (!isBatchProcessing) {
+            setImmediate(processBatchOperations);
+        }
+    } else {
+        console.warn('R2 큐가 가득참, 작업 무시됨');
+    }
+}
+
+// 위치 업데이트 디바운싱
+function debouncedUpdateNote(noteId, x, y, env) {
+    // 기존 타이머 취소
+    if (r2DebounceMap.has(noteId)) {
+        clearTimeout(r2DebounceMap.get(noteId));
+    }
+    
+    // 새 타이머 설정
+    const timeoutId = setTimeout(() => {
+        queueR2OperationBatch({
+            type: 'update',
+            noteId: noteId,
+            x: x,
+            y: y
+        });
+        r2DebounceMap.delete(noteId);
+    }, DEBOUNCE_TIME);
+    
+    r2DebounceMap.set(noteId, timeoutId);
+}
+
+// 배치 작업 처리
+async function processBatchOperations() {
+    if (isBatchProcessing || r2BatchQueue.length === 0) {
+        return;
+    }
+    
+    isBatchProcessing = true;
+    
+    try {
+        // 작업을 배치로 그룹화
+        const batch = r2BatchQueue.splice(0, BATCH_SIZE);
+        const groupedOps = groupOperations(batch);
+        
+        // 각 그룹을 병렬로 처리
+        await Promise.allSettled([
+            processCreateOperations(groupedOps.creates),
+            processUpdateOperations(groupedOps.updates),
+            processDeleteOperations(groupedOps.deletes)
+        ]);
+        
+    } catch (error) {
+        console.error('배치 처리 오류:', error);
+    } finally {
+        isBatchProcessing = false;
+        
+        // 큐에 남은 작업이 있으면 다시 처리
+        if (r2BatchQueue.length > 0) {
+            setImmediate(processBatchOperations);
+        }
+    }
+}
+
+// 작업 그룹화
+function groupOperations(operations) {
+    const grouped = {
+        creates: [],
+        updates: new Map(), // noteId -> latest update
+        deletes: new Set()
+    };
+    
+    for (const op of operations) {
+        switch (op.type) {
+            case 'create':
+                grouped.creates.push(op.note);
+                break;
+            case 'update':
+                // 같은 노트의 최신 업데이트만 유지
+                grouped.updates.set(op.noteId, {
+                    noteId: op.noteId,
+                    x: op.x,
+                    y: op.y,
+                    timestamp: op.timestamp
+                });
+                break;
+            case 'delete':
+                grouped.deletes.add(op.noteId);
+                // 업데이트 큐에서도 제거
+                grouped.updates.delete(op.noteId);
+                break;
+        }
+    }
+    
+    return grouped;
+}
+
+// 생성 작업 처리
+async function processCreateOperations(creates) {
+    if (creates.length === 0) return;
+    
+    try {
+        // 현재 노트들과 병합
+        const existingNotes = await loadNotesFromR2(globalThis.env || {});
+        const allNotes = [...existingNotes, ...creates];
+        
+        // 크기 제한
+        if (allNotes.length > 1000) {
+            allNotes.splice(0, allNotes.length - 1000);
+        }
+        
+        await saveNotesToR2(globalThis.env || {}, allNotes);
+        
+        // 개별 백업도 병렬로 저장
+        await Promise.allSettled(
+            creates.map(note => saveIndividualNote(globalThis.env || {}, note))
+        );
+        
+    } catch (error) {
+        console.error('생성 작업 처리 오류:', error);
+    }
+}
+
+// 업데이트 작업 처리
+async function processUpdateOperations(updates) {
+    if (updates.size === 0) return;
+    
+    try {
+        const existingNotes = await loadNotesFromR2(globalThis.env || {});
+        let hasChanges = false;
+        
+        for (const [noteId, updateData] of updates) {
+            const noteIndex = existingNotes.findIndex(note => note.id === noteId);
+            if (noteIndex !== -1) {
+                existingNotes[noteIndex].x = updateData.x;
+                existingNotes[noteIndex].y = updateData.y;
+                existingNotes[noteIndex].lastUpdated = updateData.timestamp;
+                hasChanges = true;
+            }
+        }
+        
+        if (hasChanges) {
+            await saveNotesToR2(globalThis.env || {}, existingNotes);
+        }
+        
+    } catch (error) {
+        console.error('업데이트 작업 처리 오류:', error);
+    }
+}
+
+// 삭제 작업 처리
+async function processDeleteOperations(deletes) {
+    if (deletes.size === 0) return;
+    
+    try {
+        const existingNotes = await loadNotesFromR2(globalThis.env || {});
+        const filteredNotes = existingNotes.filter(note => !deletes.has(note.id));
+        
+        if (filteredNotes.length !== existingNotes.length) {
+            await saveNotesToR2(globalThis.env || {}, filteredNotes);
+            
+            // 개별 파일들도 병렬로 삭제
+            await Promise.allSettled(
+                Array.from(deletes).map(noteId => 
+                    deleteIndividualNote(globalThis.env || {}, noteId)
+                )
+            );
+        }
+        
+    } catch (error) {
+        console.error('삭제 작업 처리 오류:', error);
+    }
+}
+
+// 환경 변수를 전역으로 저장 (배치 처리용)
+let globalEnv = null;
+
 // API 요청 처리
 async function handleAPI(request, env, url) {
+    // 환경 변수 전역 저장
+    globalEnv = env;
+    
     try {
         const path = url.pathname.replace('/api', '');
         
@@ -415,8 +579,10 @@ async function handleAPI(request, env, url) {
                     status: 'healthy',
                     timestamp: new Date().toISOString(),
                     connectedClients: connectedClients.size,
-                    version: '1.0.0',
-                    r2Bucket: env.STICKY_NOTES_BUCKET ? 'connected' : 'not_found'
+                    version: '2.0.0-optimized',
+                    r2Bucket: env.STICKY_NOTES_BUCKET ? 'connected' : 'not_found',
+                    queueSize: r2BatchQueue.length,
+                    debounceMapSize: r2DebounceMap.size
                 }), {
                     headers: {
                         'Content-Type': 'application/json',
@@ -429,7 +595,12 @@ async function handleAPI(request, env, url) {
                 const debugInfo = {
                     r2BucketStatus: env.STICKY_NOTES_BUCKET ? 'connected' : 'not_found',
                     connectedClients: connectedClients.size,
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
+                    performance: {
+                        queueSize: r2BatchQueue.length,
+                        debounceMapSize: r2DebounceMap.size,
+                        batchProcessing: isBatchProcessing
+                    }
                 };
                 
                 return new Response(JSON.stringify(debugInfo, null, 2), {
@@ -485,7 +656,6 @@ async function loadNotesFromR2(env) {
             return [];
         }
         
-        console.log('R2에서 notes.json 로딩 시도...');
         const notesObject = await env.STICKY_NOTES_BUCKET.get('notes.json');
         if (!notesObject) {
             console.log('notes.json 파일이 존재하지 않음, 빈 배열 반환');
@@ -494,7 +664,6 @@ async function loadNotesFromR2(env) {
         
         const notesData = await notesObject.text();
         const notes = JSON.parse(notesData);
-        console.log(`R2에서 ${notes.length}개의 노트 로드됨`);
         return notes;
     } catch (error) {
         console.error('R2에서 노트 로드 오류:', error);
@@ -502,31 +671,17 @@ async function loadNotesFromR2(env) {
     }
 }
 
-// R2에 노트 저장
-async function saveNoteToR2(env, note) {
+// R2에 노트들 저장 (배치용)
+async function saveNotesToR2(env, notes) {
     try {
         if (!env.STICKY_NOTES_BUCKET) {
             console.warn('STICKY_NOTES_BUCKET이 설정되지 않아 노트를 저장할 수 없습니다');
             return;
         }
         
-        console.log('노트 저장 시작:', note.id);
-        
-        // 기존 노트들 로드
-        const existingNotes = await loadNotesFromR2(env);
-        
-        // 새 노트 추가
-        existingNotes.push(note);
-        
-        // 최대 노트 수 제한 (1000개)
-        if (existingNotes.length > 1000) {
-            existingNotes.splice(0, existingNotes.length - 1000);
-        }
-        
-        // R2에 저장
         await env.STICKY_NOTES_BUCKET.put(
             'notes.json',
-            JSON.stringify(existingNotes),
+            JSON.stringify(notes),
             {
                 httpMetadata: {
                     contentType: 'application/json',
@@ -534,7 +689,16 @@ async function saveNoteToR2(env, note) {
             }
         );
         
-        // 개별 노트 백업 저장 (복구용)
+    } catch (error) {
+        console.error('R2에 노트들 저장 오류:', error);
+    }
+}
+
+// 개별 노트 저장
+async function saveIndividualNote(env, note) {
+    try {
+        if (!env.STICKY_NOTES_BUCKET) return;
+        
         await env.STICKY_NOTES_BUCKET.put(
             `notes/${note.id}.json`,
             JSON.stringify(note),
@@ -545,100 +709,39 @@ async function saveNoteToR2(env, note) {
             }
         );
         
-        console.log('노트 저장 완료:', note.id);
-        
     } catch (error) {
-        console.error('R2에 노트 저장 오류:', error);
-        // 에러가 발생해도 앱이 멈추지 않도록 처리
+        console.error('개별 노트 저장 오류:', error);
     }
 }
 
-// R2에서 노트 삭제
-async function deleteNoteFromR2(env, noteId) {
+// 개별 노트 삭제
+async function deleteIndividualNote(env, noteId) {
     try {
-        if (!env.STICKY_NOTES_BUCKET) {
-            console.warn('STICKY_NOTES_BUCKET이 설정되지 않아 노트를 삭제할 수 없습니다');
-            return;
-        }
+        if (!env.STICKY_NOTES_BUCKET) return;
         
-        // 기존 노트들 로드
-        const existingNotes = await loadNotesFromR2(env);
-        
-        // 노트 필터링 (삭제)
-        const filteredNotes = existingNotes.filter(note => note.id !== noteId);
-        
-        // R2에 업데이트된 목록 저장
-        await env.STICKY_NOTES_BUCKET.put(
-            'notes.json',
-            JSON.stringify(filteredNotes),
-            {
-                httpMetadata: {
-                    contentType: 'application/json',
-                },
-            }
-        );
-        
-        // 개별 노트 파일도 삭제
         await env.STICKY_NOTES_BUCKET.delete(`notes/${noteId}.json`);
         
     } catch (error) {
-        console.error('R2에서 노트 삭제 오류:', error);
-    }
-}
-
-// R2에서 노트 위치 업데이트
-async function updateNoteInR2(env, noteId, x, y) {
-    try {
-        if (!env.STICKY_NOTES_BUCKET) {
-            console.warn('STICKY_NOTES_BUCKET이 설정되지 않아 노트를 업데이트할 수 없습니다');
-            return;
-        }
-        
-        console.log('노트 위치 업데이트 시작:', noteId, x, y);
-        
-        // 기존 노트들 로드
-        const existingNotes = await loadNotesFromR2(env);
-        
-        // 해당 노트 찾아서 위치 업데이트
-        const noteIndex = existingNotes.findIndex(note => note.id === noteId);
-        if (noteIndex !== -1) {
-            existingNotes[noteIndex].x = x;
-            existingNotes[noteIndex].y = y;
-            existingNotes[noteIndex].lastUpdated = Date.now();
-            
-            // R2에 업데이트된 목록 저장
-            await env.STICKY_NOTES_BUCKET.put(
-                'notes.json',
-                JSON.stringify(existingNotes),
-                {
-                    httpMetadata: {
-                        contentType: 'application/json',
-                    },
-                }
-            );
-            
-            // 개별 노트 파일도 업데이트
-            await env.STICKY_NOTES_BUCKET.put(
-                `notes/${noteId}.json`,
-                JSON.stringify(existingNotes[noteIndex]),
-                {
-                    httpMetadata: {
-                        contentType: 'application/json',
-                    },
-                }
-            );
-            
-            console.log('노트 위치 업데이트 완료:', noteId);
-        } else {
-            console.warn('업데이트할 노트를 찾을 수 없음:', noteId);
-        }
-        
-    } catch (error) {
-        console.error('R2에서 노트 업데이트 오류:', error);
+        console.error('개별 노트 삭제 오류:', error);
     }
 }
 
 // 클라이언트 ID 생성
 function generateClientId() {
     return 'client_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-} 
+}
+
+// setImmediate 폴리필 (Cloudflare Workers용)
+const setImmediate = globalThis.setImmediate || ((fn) => setTimeout(fn, 0));
+
+// 환경 변수를 전역으로 설정
+function setGlobalEnv(env) {
+    globalThis.env = env;
+}
+
+// WebSocket 연결 처리 시 환경 변수 설정
+const originalHandleWebSocketConnection = handleWebSocketConnection;
+handleWebSocketConnection = function(websocket, env) {
+    setGlobalEnv(env);
+    return originalHandleWebSocketConnection(websocket, env);
+}; 
