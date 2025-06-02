@@ -116,6 +116,104 @@ console.log(`
 - debugStickyNotes.getConnectionInfo() : 연결 상태 확인
 `);
 
+// 초경량 즉시 전송 함수 (최소 데이터만 전송)
+function sendNoteUpdateImmediate(note) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const timestamp = Date.now();
+        latencyMonitor.lastSent = timestamp;
+        
+        // 최소한의 데이터만 전송하여 네트워크 부하 감소
+        ws.send(JSON.stringify({
+            t: 'u', // type: 'update_note' 축약
+            id: note.id,
+            x: Math.round(note.x), // 소수점 제거
+            y: Math.round(note.y), // 소수점 제거
+            ts: timestamp,
+            c: currentUser.id // clientId 축약
+        }));
+        
+        // 지연시간 디버깅
+        console.log(`📤 ${timestamp}: (${Math.round(note.x)}, ${Math.round(note.y)})`);
+    }
+}
+
+// 디버깅 유틸리티 함수들
+window.debugJustStickyNotes = {
+    // 현재 상태 확인
+    getState: () => ({
+        connectedToWS: ws && ws.readyState === WebSocket.OPEN,
+        notesCount: stickyNotes.length,
+        currentUser: currentUser,
+        canvasElements: canvas ? canvas.children.length : 0
+    }),
+    
+    // 강제 동기화
+    forceSync: () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'sync_request', timestamp: Date.now() }));
+            console.log('🔄 강제 동기화 요청 전송');
+        } else {
+            console.log('❌ WebSocket 연결 없음');
+        }
+    },
+    
+    // 테스트 노트 생성
+    createTestNote: () => {
+        const testNote = {
+            id: 'test_' + Date.now(),
+            x: Math.random() * 500,
+            y: Math.random() * 300,
+            color: '#FFE4B5',
+            text: '테스트 노트',
+            author: currentUser?.name || 'Test User',
+            authorId: currentUser?.id || 'test_user',
+            rotation: 0,
+            timestamp: Date.now()
+        };
+        
+        addStickyNote(testNote);
+        console.log('🧪 테스트 노트 생성:', testNote);
+        return testNote;
+    },
+    
+    // 모든 노트 정보 출력
+    listNotes: () => {
+        console.log('📋 현재 노트 목록:');
+        stickyNotes.forEach((note, index) => {
+            console.log(`${index + 1}. ${note.id}: (${note.x}, ${note.y}) - ${note.author}`);
+        });
+        return stickyNotes;
+    },
+    
+    // DOM과 데이터 일치 확인
+    checkConsistency: () => {
+        const domNotes = canvas ? Array.from(canvas.querySelectorAll('[data-note-id]')).map(el => el.dataset.noteId) : [];
+        const dataNotes = stickyNotes.map(n => n.id);
+        
+        console.log('🔍 일치성 검사:');
+        console.log('DOM 노트:', domNotes);
+        console.log('데이터 노트:', dataNotes);
+        
+        const missingInDOM = dataNotes.filter(id => !domNotes.includes(id));
+        const missingInData = domNotes.filter(id => !dataNotes.includes(id));
+        
+        if (missingInDOM.length > 0) {
+            console.warn('❌ DOM에 없는 데이터:', missingInDOM);
+        }
+        if (missingInData.length > 0) {
+            console.warn('❌ 데이터에 없는 DOM:', missingInData);
+        }
+        
+        if (missingInDOM.length === 0 && missingInData.length === 0) {
+            console.log('✅ DOM과 데이터가 일치함');
+        }
+        
+        return { domNotes, dataNotes, missingInDOM, missingInData };
+    }
+};
+
+console.log('🛠️ 디버깅 도구 준비됨. window.debugJustStickyNotes 사용 가능');
+
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
     checkLoginStatus();
@@ -589,21 +687,30 @@ async function saveNote() {
 
 // 스티키 노트 추가 (중복 방지)
 function addStickyNote(note) {
+    console.log(`➕ addStickyNote 호출됨:`, note);
+    
     // 이미 존재하는 노트인지 확인
     if (stickyNotes.find(n => n.id === note.id)) {
+        console.log(`⏭️ 이미 존재하는 노트: ${note.id}`);
         return;
     }
     
     stickyNotes.push(note);
+    console.log(`✅ 노트 배열에 추가됨: ${note.id}, 총 ${stickyNotes.length}개 노트`);
     renderStickyNote(note);
 }
 
 // 스티키 노트 렌더링
 function renderStickyNote(note) {
+    console.log(`🎨 renderStickyNote 호출됨:`, note);
+    
     // 이미 렌더링된 노트인지 확인
     if (canvas.querySelector(`[data-note-id="${note.id}"]`)) {
+        console.log(`⏭️ 이미 렌더링된 노트: ${note.id}`);
         return;
     }
+    
+    console.log(`🎯 새 노트 DOM 생성 시작: ${note.id}`);
     
     const noteElement = document.createElement('div');
     noteElement.className = 'sticky-note';
@@ -613,9 +720,12 @@ function renderStickyNote(note) {
     noteElement.style.transform = `rotate(${note.rotation}deg)`;
     noteElement.dataset.noteId = note.id;
     
+    console.log(`📍 노트 위치 설정: ${note.id} -> (${note.x}, ${note.y})`);
+    
     // 본인이 만든 노트는 드래그 가능 표시
     if (note.authorId === currentUser.id) {
         noteElement.classList.add('draggable');
+        console.log(`🖱️ 드래그 가능 노트로 설정: ${note.id}`);
     }
     
     const contentDiv = document.createElement('div');
@@ -623,6 +733,7 @@ function renderStickyNote(note) {
     
     // 통합 이미지가 있으면 표시
     if (note.drawing) {
+        console.log(`🎨 노트에 그림 추가: ${note.id}`);
         const drawingImg = document.createElement('img');
         drawingImg.className = 'note-drawing';
         drawingImg.src = note.drawing;
@@ -633,6 +744,7 @@ function renderStickyNote(note) {
     
     // 텍스트만 있고 그림이 없는 경우 (하위 호환성)
     if (note.text && !note.drawing) {
+        console.log(`📝 노트에 텍스트 추가: ${note.id}`);
         const textDiv = document.createElement('div');
         textDiv.className = 'note-text';
         textDiv.textContent = note.text;
@@ -646,7 +758,24 @@ function renderStickyNote(note) {
     noteElement.appendChild(contentDiv);
     noteElement.appendChild(authorDiv);
     
+    // canvas가 존재하는지 확인
+    if (!canvas) {
+        console.error(`❌ canvas 요소를 찾을 수 없음!`);
+        return;
+    }
+    
     canvas.appendChild(noteElement);
+    console.log(`✨ DOM에 노트 추가 완료: ${note.id}`);
+    
+    // 추가 확인: DOM에 실제로 추가되었는지 검증
+    setTimeout(() => {
+        const addedElement = canvas.querySelector(`[data-note-id="${note.id}"]`);
+        if (addedElement) {
+            console.log(`✅ DOM 추가 검증 성공: ${note.id}`);
+        } else {
+            console.error(`❌ DOM 추가 검증 실패: ${note.id}`);
+        }
+    }, 100);
 }
 
 // 페이지 가시성 변경 처리
@@ -762,8 +891,18 @@ function connectWebSocket() {
     };
     
     ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+        console.log(`📨 WebSocket 메시지 수신:`, event.data);
+        
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (error) {
+            console.error('❌ JSON 파싱 오류:', error, event.data);
+            return;
+        }
+        
         const receiveTimestamp = Date.now();
+        console.log(`📦 파싱된 메시지:`, data);
         
         // 지연시간 계산
         if (data.timestamp) {
@@ -777,10 +916,12 @@ function connectWebSocket() {
             console.log(`📥 메시지 수신 지연시간: ${latency}ms (평균: ${Math.round(latencyMonitor.averageLatency)}ms)`);
         }
         
+        console.log(`🎯 메시지 타입 처리 시작: ${data.type || data.t}`);
+        
         switch (data.type || data.t) {
             case 'note_created':
                 // 서버에서 노트 생성 완료 - 모든 사용자에게 추가
-                console.log(`📝 새 노트 생성됨: ${data.note.id}`);
+                console.log(`📝 새 노트 생성됨: ${data.note.id}`, data.note);
                 addStickyNote(data.note);
                 
                 // 본인이 만든 노트인 경우 저장 버튼 복원
@@ -789,8 +930,15 @@ function connectWebSocket() {
                     if (saveBtn) {
                         saveBtn.disabled = false;
                         saveBtn.textContent = '붙이기';
+                        console.log(`💾 저장 버튼 복원: ${data.note.id}`);
                     }
                 }
+                break;
+            case 'note_deleted':
+                // 노트 삭제 처리
+                console.log(`🗑️ 노트 삭제됨: ${data.noteId}`);
+                removeNoteFromDOM(data.noteId);
+                showNotification('노트가 삭제되었습니다', 'info');
                 break;
             case 'note_updated':
             case 'u': // 축약형 지원
@@ -801,26 +949,26 @@ function connectWebSocket() {
                 const y = data.y;
                 const clientId = data.clientId || data.c;
                 
-                console.log(`🔄 ${noteId}: ${updateLatency}ms`);
+                console.log(`🔄 노트 업데이트 수신: ${noteId}, (${x}, ${y}), 지연: ${updateLatency}ms, 클라이언트: ${clientId}`);
                 updateNotePositionImmediate(noteId, x, y, clientId);
                 break;
             case 'notes_load':
             case 'sync_response':
                 // 기존 노트들 로드 또는 동기화 응답
-                console.log(`📋 노트 동기화: ${data.notes.length}개`);
+                console.log(`📋 노트 동기화 수신: ${data.notes.length}개`, data.notes);
                 handleNotesSync(data.notes);
                 break;
             case 'user_joined':
-                console.log('새 사용자 접속:', data.user.name);
+                console.log('👋 새 사용자 접속:', data.user.name);
                 showNotification(`${data.user.name}님이 접속했습니다`, 'info');
                 break;
             case 'user_left':
-                console.log('사용자 퇴장:', data.user.name);
+                console.log('👋 사용자 퇴장:', data.user.name);
                 showNotification(`${data.user.name}님이 나갔습니다`, 'info');
                 break;
             case 'auth_success':
                 // 인증 성공 후 노트 로드 요청
-                console.log('✅ 인증 성공');
+                console.log('✅ 인증 성공, 노트 로드 요청');
                 ws.send(JSON.stringify({
                     type: 'load_notes'
                 }));
@@ -831,7 +979,16 @@ function connectWebSocket() {
                 console.log(`💓 하트비트 응답: ${heartbeatLatency}ms`);
                 updateConnectionStatus('connected');
                 break;
+            case 'error':
+                // 에러 메시지 처리
+                console.error('❌ 서버 에러:', data.message);
+                showNotification(`오류: ${data.message}`, 'error');
+                break;
+            default:
+                console.log('❓ 알 수 없는 메시지 타입:', data.type || data.t, data);
         }
+        
+        console.log(`✅ 메시지 처리 완료: ${data.type || data.t}`);
     };
     
     ws.onclose = (event) => {
@@ -879,29 +1036,48 @@ function startHeartbeat() {
 
 // 노트 동기화 처리
 function handleNotesSync(notes) {
+    console.log(`🔄 handleNotesSync 시작: 기존 ${stickyNotes.length}개, 새로운 ${notes.length}개`);
+    
     // 기존 노트들과 비교하여 변경사항만 적용
     const existingNoteIds = new Set(stickyNotes.map(n => n.id));
     const newNoteIds = new Set(notes.map(n => n.id));
     
+    console.log(`📊 기존 노트 IDs:`, Array.from(existingNoteIds));
+    console.log(`📊 새로운 노트 IDs:`, Array.from(newNoteIds));
+    
     // 삭제된 노트 제거
+    const notesToRemove = [];
     stickyNotes.forEach(note => {
         if (!newNoteIds.has(note.id)) {
-            removeNoteFromDOM(note.id);
+            notesToRemove.push(note.id);
         }
+    });
+    
+    console.log(`🗑️ 삭제할 노트들:`, notesToRemove);
+    notesToRemove.forEach(noteId => {
+        removeNoteFromDOM(noteId);
     });
     
     // 새로운 노트들 추가/업데이트
+    let addedCount = 0;
+    let updatedCount = 0;
+    
     notes.forEach(note => {
         if (!existingNoteIds.has(note.id)) {
             // 새 노트 추가
+            console.log(`➕ 새 노트 추가: ${note.id}`);
             addStickyNote(note);
+            addedCount++;
         } else {
             // 기존 노트 업데이트 (위치 등)
+            console.log(`🔄 기존 노트 업데이트: ${note.id}`);
             updateExistingNote(note);
+            updatedCount++;
         }
     });
     
-    console.log(`동기화 완료: ${notes.length}개 노트`);
+    console.log(`✅ 동기화 완료: 추가 ${addedCount}개, 업데이트 ${updatedCount}개, 삭제 ${notesToRemove.length}개`);
+    console.log(`📋 최종 노트 수: ${stickyNotes.length}개`);
 }
 
 // 기존 노트 업데이트
@@ -993,8 +1169,11 @@ function updateNotePosition(noteId, x, y) {
 
 // 즉시 위치 업데이트 함수
 function updateNotePositionImmediate(noteId, x, y, clientId) {
+    console.log(`🔄 updateNotePositionImmediate 호출됨: ${noteId}, x=${x}, y=${y}, clientId=${clientId}, currentUser=${currentUser?.id}`);
+    
     // 자신이 보낸 업데이트는 무시 (이미 로컬에서 처리됨)
-    if (clientId === currentUser.id) {
+    if (clientId === currentUser?.id) {
+        console.log(`⏭️ 자신의 업데이트 무시: ${noteId}`);
         return;
     }
     
@@ -1003,16 +1182,39 @@ function updateNotePositionImmediate(noteId, x, y, clientId) {
     if (note) {
         note.x = x;
         note.y = y;
+        console.log(`✅ 로컬 데이터 업데이트됨: ${noteId} -> (${x}, ${y})`);
+    } else {
+        console.warn(`❌ 노트를 찾을 수 없음: ${noteId}`);
     }
     
-    // DOM 요소 즉시 업데이트 (현재 드래그 중이 아닌 경우에만)
-    if (!isDraggingNote || draggedNote.dataset.noteId !== noteId) {
-        const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
-        if (noteElement) {
-            // 즉시 위치 변경 (애니메이션 없음) - 최대 성능
-            noteElement.style.transform = `translate(${x}px, ${y}px)`;
-        }
+    // DOM 요소 즉시 업데이트
+    const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
+    if (!noteElement) {
+        console.warn(`❌ DOM 요소를 찾을 수 없음: ${noteId}`);
+        return;
     }
+    
+    // 현재 드래그 중인 노트가 아닌 경우에만 업데이트
+    if (isDraggingNote && draggedNote && draggedNote.dataset.noteId === noteId) {
+        console.log(`⏭️ 드래그 중인 노트 업데이트 무시: ${noteId}`);
+        return;
+    }
+    
+    console.log(`🎯 DOM 업데이트 적용: ${noteId} -> (${x}, ${y})`);
+    
+    // CSS 스타일 직접 업데이트 (transform 대신 left/top 사용)
+    noteElement.style.transition = 'none'; // 애니메이션 제거
+    noteElement.style.left = x + 'px';
+    noteElement.style.top = y + 'px';
+    
+    // 짧은 시간 후 부드러운 transition 복원
+    setTimeout(() => {
+        if (noteElement) {
+            noteElement.style.transition = 'all 0.2s ease';
+        }
+    }, 50);
+    
+    console.log(`✨ DOM 업데이트 완료: ${noteId}`);
 }
 
 // 키보드 단축키
@@ -1146,26 +1348,5 @@ function updateLatencyDisplay() {
             (ws.readyState === WebSocket.OPEN ? '✅ 연결됨' : 
              ws.readyState === WebSocket.CONNECTING ? '🟡 연결 중...' : '❌ 끊김') : 
             '❌ 없음';
-    }
-}
-
-// 초경량 즉시 전송 함수 (최소 데이터만 전송)
-function sendNoteUpdateImmediate(note) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        const timestamp = Date.now();
-        latencyMonitor.lastSent = timestamp;
-        
-        // 최소한의 데이터만 전송하여 네트워크 부하 감소
-        ws.send(JSON.stringify({
-            t: 'u', // type: 'update_note' 축약
-            id: note.id,
-            x: Math.round(note.x), // 소수점 제거
-            y: Math.round(note.y), // 소수점 제거
-            ts: timestamp,
-            c: currentUser.id // clientId 축약
-        }));
-        
-        // 지연시간 디버깅
-        console.log(`📤 ${timestamp}: (${Math.round(note.x)}, ${Math.round(note.y)})`);
     }
 } 
