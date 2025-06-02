@@ -292,7 +292,7 @@ function handleCanvasMouseDown(e) {
 
 function handleCanvasMouseMove(e) {
     if (isDraggingNote && draggedNote) {
-        // 스티키 노트 드래그
+        // 스티키 노트 드래그 - 로컬에서만 위치 업데이트 (서버는 드래그 완료 시)
         const rect = canvasContainer.getBoundingClientRect();
         const newX = (e.clientX - rect.left - panX) / zoomLevel - dragOffsetX;
         const newY = (e.clientY - rect.top - panY) / zoomLevel - dragOffsetY;
@@ -300,19 +300,12 @@ function handleCanvasMouseMove(e) {
         draggedNote.style.left = newX + 'px';
         draggedNote.style.top = newY + 'px';
         
-        // 노트 데이터 업데이트
+        // 로컬 데이터만 업데이트 (서버 전송은 드래그 완료 시)
         const noteId = draggedNote.dataset.noteId;
         const note = stickyNotes.find(n => n.id === noteId);
         if (note) {
             note.x = newX;
             note.y = newY;
-            
-            // 스로틀링을 통한 실시간 위치 업데이트
-            const now = Date.now();
-            if (now - lastUpdateTime > updateThrottle) {
-                sendNoteUpdate(note);
-                lastUpdateTime = now;
-            }
         }
         
     } else if (isDragging && currentTool === 'move') {
@@ -512,16 +505,18 @@ async function saveNote() {
         rotation: (Math.random() - 0.5) * 10 // -5도에서 5도 사이 랜덤 회전
     };
     
-    // 서버에 전송
+    // 서버에만 전송, 로컬에는 추가하지 않음 (서버 응답 대기)
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
             type: 'create_note',
             note: note
         }));
+        
+        // 저장 버튼 비활성화하여 중복 전송 방지
+        const saveBtn = document.getElementById('save-note');
+        saveBtn.disabled = true;
+        saveBtn.textContent = '저장 중...';
     }
-    
-    // 로컬에 추가
-    addStickyNote(note);
     
     closeNoteEditor();
 }
@@ -705,9 +700,16 @@ function connectWebSocket() {
         
         switch (data.type) {
             case 'note_created':
-                // 다른 사용자가 만든 노트만 추가
-                if (data.note.authorId !== currentUser.id) {
-                    addStickyNote(data.note);
+                // 서버에서 노트 생성 완료 - 모든 사용자에게 추가
+                addStickyNote(data.note);
+                
+                // 본인이 만든 노트인 경우 저장 버튼 복원
+                if (data.note.authorId === currentUser.id) {
+                    const saveBtn = document.getElementById('save-note');
+                    if (saveBtn) {
+                        saveBtn.disabled = false;
+                        saveBtn.textContent = '붙이기';
+                    }
                 }
                 break;
             case 'note_updated':

@@ -175,34 +175,42 @@ async function handleWebSocketMessage(clientId, data, env) {
                 // 새 스티키 노트 생성
                 const note = data.note;
                 
-                // R2에 노트 저장
-                await saveNoteToR2(env, note);
-                
-                // 모든 클라이언트에게 새 노트 알림
+                // 즉시 모든 클라이언트에게 브로드캐스트 (빠른 응답)
                 broadcastMessage({
                     type: 'note_created',
                     note: note
+                });
+                
+                // R2에 비동기로 저장 (브로드캐스트와 병렬 처리)
+                saveNoteToR2(env, note).catch(error => {
+                    console.error('R2 저장 오류:', error);
                 });
                 break;
                 
             case 'delete_note':
                 // 스티키 노트 삭제 (추가 기능)
-                await deleteNoteFromR2(env, data.noteId);
                 broadcastMessage({
                     type: 'note_deleted',
                     noteId: data.noteId
+                });
+                
+                deleteNoteFromR2(env, data.noteId).catch(error => {
+                    console.error('R2 삭제 오류:', error);
                 });
                 break;
                 
             case 'update_note':
                 // 스티키 노트 위치 업데이트
-                await updateNoteInR2(env, data.noteId, data.x, data.y);
                 broadcastMessage({
                     type: 'note_updated',
                     noteId: data.noteId,
                     x: data.x,
                     y: data.y
                 }, clientId);
+                
+                updateNoteInR2(env, data.noteId, data.x, data.y).catch(error => {
+                    console.error('R2 업데이트 오류:', error);
+                });
                 break;
                 
             case 'ping':
