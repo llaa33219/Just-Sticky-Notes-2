@@ -793,4 +793,55 @@ body {
         transform: translateX(100%);
         opacity: 0;
     }
+}
+
+/* 지연시간 모니터 */
+#latency-monitor {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 11px;
+    z-index: 9999;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    min-width: 160px;
+}
+
+.latency-title {
+    font-weight: bold;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: #4CAF50;
+    text-align: center;
+}
+
+.latency-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    align-items: center;
+}
+
+.latency-item span:first-child {
+    opacity: 0.8;
+}
+
+.latency-item span:last-child {
+    font-weight: bold;
+}
+
+.latency-item .good {
+    color: #4CAF50;
+}
+
+.latency-item .ok {
+    color: #FF9800;
+}
+
+.latency-item .bad {
+    color: #f44336;
 } 

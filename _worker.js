@@ -148,7 +148,8 @@ async function handleWebSocketMessage(clientId, data, env) {
                 // 인증 성공 응답
                 client.websocket.send(JSON.stringify({
                     type: 'auth_success',
-                    user: data.user
+                    user: data.user,
+                    timestamp: Date.now()
                 }));
                 break;
                 
@@ -157,7 +158,8 @@ async function handleWebSocketMessage(clientId, data, env) {
                 const notes = await loadNotesFromR2(env);
                 client.websocket.send(JSON.stringify({
                     type: 'notes_load',
-                    notes: notes
+                    notes: notes,
+                    timestamp: Date.now()
                 }));
                 break;
                 
@@ -175,47 +177,45 @@ async function handleWebSocketMessage(clientId, data, env) {
                 // 새 스티키 노트 생성
                 const note = data.note;
                 
-                // 즉시 모든 클라이언트에게 브로드캐스트 (빠른 응답)
+                // 즉시 모든 클라이언트에게 브로드캐스트 (최고 우선순위)
                 broadcastMessage({
                     type: 'note_created',
-                    note: note
+                    note: note,
+                    timestamp: Date.now()
                 });
                 
-                // R2에 비동기로 저장 (브로드캐스트와 병렬 처리)
-                saveNoteToR2(env, note).catch(error => {
-                    console.error('R2 저장 오류:', error);
-                });
+                // R2 저장을 백그라운드에서 처리 (절대 브로드캐스트 블로킹 안함)
+                queueR2Operation(() => saveNoteToR2(env, note));
                 break;
                 
             case 'delete_note':
-                // 스티키 노트 삭제 (추가 기능)
+                // 스티키 노트 삭제
                 broadcastMessage({
                     type: 'note_deleted',
-                    noteId: data.noteId
+                    noteId: data.noteId,
+                    timestamp: Date.now()
                 });
                 
-                deleteNoteFromR2(env, data.noteId).catch(error => {
-                    console.error('R2 삭제 오류:', error);
-                });
+                // R2 삭제를 백그라운드에서 처리
+                queueR2Operation(() => deleteNoteFromR2(env, data.noteId));
                 break;
                 
             case 'update_note':
-                // 스티키 노트 위치 업데이트 - 즉시 브로드캐스트
+                // 스티키 노트 위치 업데이트 - 절대 우선순위로 즉시 브로드캐스트
                 const updateMessage = {
                     type: 'note_updated',
                     noteId: data.noteId,
                     x: data.x,
                     y: data.y,
-                    timestamp: Date.now()
+                    timestamp: data.timestamp, // 원본 타임스탬프 유지
+                    clientId: data.clientId
                 };
                 
-                // 즉시 모든 클라이언트에게 브로드캐스트 (최고 우선순위)
+                // 즉시 브로드캐스트 (어떤 것도 이를 블로킹하지 않음)
                 broadcastMessage(updateMessage, clientId);
                 
-                // R2 업데이트는 비동기로 처리 (브로드캐스트 이후)
-                updateNoteInR2(env, data.noteId, data.x, data.y).catch(error => {
-                    console.error('R2 업데이트 오류:', error);
-                });
+                // R2 업데이트를 별도 큐에서 처리
+                queueR2Operation(() => updateNoteInR2(env, data.noteId, data.x, data.y));
                 break;
                 
             case 'ping':
@@ -223,11 +223,11 @@ async function handleWebSocketMessage(clientId, data, env) {
                 client.lastSeen = Date.now();
                 client.websocket.send(JSON.stringify({
                     type: 'pong',
-                    timestamp: Date.now()
+                    timestamp: data.timestamp
                 }));
                 
-                // 이 시점에서 비활성 클라이언트 정리
-                cleanupInactiveClients();
+                // 비활성 클라이언트 정리도 백그라운드에서
+                queueBackgroundTask(() => cleanupInactiveClients());
                 break;
                 
             default:
@@ -239,12 +239,70 @@ async function handleWebSocketMessage(clientId, data, env) {
         try {
             client.websocket.send(JSON.stringify({
                 type: 'error',
-                message: '요청 처리 중 오류가 발생했습니다.'
+                message: '요청 처리 중 오류가 발생했습니다.',
+                timestamp: Date.now()
             }));
         } catch (sendError) {
             console.error('에러 알림 전송 실패:', sendError);
         }
     }
+}
+
+// R2 작업 큐 (브로드캐스트와 완전 분리)
+const r2OperationQueue = [];
+let isProcessingR2Queue = false;
+
+function queueR2Operation(operation) {
+    r2OperationQueue.push(operation);
+    processR2Queue(); // 비동기로 처리
+}
+
+async function processR2Queue() {
+    if (isProcessingR2Queue || r2OperationQueue.length === 0) {
+        return;
+    }
+    
+    isProcessingR2Queue = true;
+    
+    while (r2OperationQueue.length > 0) {
+        const operation = r2OperationQueue.shift();
+        try {
+            await operation();
+        } catch (error) {
+            console.error('R2 작업 처리 오류:', error);
+            // R2 오류가 있어도 계속 진행
+        }
+    }
+    
+    isProcessingR2Queue = false;
+}
+
+// 백그라운드 작업 큐
+const backgroundTaskQueue = [];
+let isProcessingBackgroundTasks = false;
+
+function queueBackgroundTask(task) {
+    backgroundTaskQueue.push(task);
+    processBackgroundTasks();
+}
+
+async function processBackgroundTasks() {
+    if (isProcessingBackgroundTasks || backgroundTaskQueue.length === 0) {
+        return;
+    }
+    
+    isProcessingBackgroundTasks = true;
+    
+    while (backgroundTaskQueue.length > 0) {
+        const task = backgroundTaskQueue.shift();
+        try {
+            await task();
+        } catch (error) {
+            console.error('백그라운드 작업 오류:', error);
+        }
+    }
+    
+    isProcessingBackgroundTasks = false;
 }
 
 // 비활성 클라이언트 정리 함수

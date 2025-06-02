@@ -17,13 +17,19 @@ let dragOffsetX = 0;
 let dragOffsetY = 0;
 let isDraggingNote = false;
 let lastUpdateTime = 0;
-let updateThrottle = 25; // 25ms 간격으로 초고속 실시간 업데이트
+let updateThrottle = 0; // throttle 완전 제거 - 모든 움직임 즉시 전송
 let currentNoteTool = 'text';
 let noteIsDrawing = false;
 let reconnectInterval = null;
 let heartbeatInterval = null;
 let isPageVisible = true;
 let connectionStatus = 'disconnected'; // 'connected', 'connecting', 'disconnected'
+let latencyMonitor = {
+    lastSent: 0,
+    lastReceived: 0,
+    averageLatency: 0,
+    samples: []
+};
 
 // DOM 요소들
 const loginScreen = document.getElementById('login-screen');
@@ -58,6 +64,58 @@ const underlineToolBtn = document.getElementById('underline-tool');
 const circleToolBtn = document.getElementById('circle-tool');
 const clearAllBtn = document.getElementById('clear-all');
 
+// 전역 디버깅 함수들 (콘솔에서 사용 가능)
+window.debugStickyNotes = {
+    // 현재 지연시간 정보 출력
+    getLatencyInfo: () => {
+        console.log('📊 실시간 성능 정보:');
+        console.log(`네트워크 지연: ${latencyMonitor.samples.length > 0 ? latencyMonitor.samples[latencyMonitor.samples.length - 1] + 'ms' : '없음'}`);
+        console.log(`평균 지연: ${Math.round(latencyMonitor.averageLatency)}ms`);
+        console.log(`전송 횟수: ${latencyMonitor.samples.length}`);
+        console.log(`WebSocket 상태: ${ws ? ws.readyState : '없음'}`);
+        console.log(`연결된 노트 수: ${stickyNotes.length}`);
+        return latencyMonitor;
+    },
+    
+    // 성능 초기화
+    resetLatency: () => {
+        latencyMonitor.samples = [];
+        latencyMonitor.averageLatency = 0;
+        console.log('🔄 지연시간 통계 초기화됨');
+    },
+    
+    // 강제 동기화
+    forceSync: () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'sync_request',
+                timestamp: Date.now()
+            }));
+            console.log('🔄 강제 동기화 요청 전송됨');
+        } else {
+            console.log('❌ WebSocket이 연결되지 않음');
+        }
+    },
+    
+    // 연결 상태 출력
+    getConnectionInfo: () => {
+        console.log('🔗 연결 정보:');
+        console.log(`WebSocket URL: ${ws ? ws.url : '없음'}`);
+        console.log(`현재 상태: ${connectionStatus}`);
+        console.log(`페이지 가시성: ${isPageVisible}`);
+        console.log(`현재 사용자: ${currentUser ? currentUser.name : '없음'}`);
+    }
+};
+
+// 콘솔에 사용법 출력
+console.log(`
+🚀 Just Sticky Notes 디버깅 도구:
+- debugStickyNotes.getLatencyInfo() : 지연시간 정보 확인
+- debugStickyNotes.resetLatency() : 통계 초기화
+- debugStickyNotes.forceSync() : 강제 동기화
+- debugStickyNotes.getConnectionInfo() : 연결 상태 확인
+`);
+
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
     checkLoginStatus();
@@ -66,6 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
     connectWebSocket();
     setupVisibilityHandlers();
     setupConnectionStatusIndicator();
+    setupLatencyMonitor(); // 지연시간 모니터 추가
 });
 
 // 로그인 상태 확인
@@ -292,7 +351,7 @@ function handleCanvasMouseDown(e) {
 
 function handleCanvasMouseMove(e) {
     if (isDraggingNote && draggedNote) {
-        // 스티키 노트 드래그 - 실시간으로 서버에 업데이트
+        // 스티키 노트 드래그 - 즉시 서버에 업데이트 (throttle 제거)
         requestAnimationFrame(() => {
             const rect = canvasContainer.getBoundingClientRect();
             const newX = (e.clientX - rect.left - panX) / zoomLevel - dragOffsetX;
@@ -309,12 +368,8 @@ function handleCanvasMouseMove(e) {
                 note.x = newX;
                 note.y = newY;
                 
-                // 실시간 서버 업데이트 (throttled)
-                const now = Date.now();
-                if (now - lastUpdateTime > updateThrottle) {
-                    sendNoteUpdate(note);
-                    lastUpdateTime = now;
-                }
+                // 즉시 서버 업데이트 (throttle 완전 제거)
+                sendNoteUpdateImmediate(note);
             }
         });
         
@@ -708,10 +763,24 @@ function connectWebSocket() {
     
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        const receiveTimestamp = Date.now();
+        
+        // 지연시간 계산
+        if (data.timestamp) {
+            const latency = receiveTimestamp - data.timestamp;
+            latencyMonitor.samples.push(latency);
+            if (latencyMonitor.samples.length > 10) {
+                latencyMonitor.samples.shift();
+            }
+            latencyMonitor.averageLatency = latencyMonitor.samples.reduce((a, b) => a + b, 0) / latencyMonitor.samples.length;
+            
+            console.log(`📥 메시지 수신 지연시간: ${latency}ms (평균: ${Math.round(latencyMonitor.averageLatency)}ms)`);
+        }
         
         switch (data.type) {
             case 'note_created':
                 // 서버에서 노트 생성 완료 - 모든 사용자에게 추가
+                console.log(`📝 새 노트 생성됨: ${data.note.id}`);
                 addStickyNote(data.note);
                 
                 // 본인이 만든 노트인 경우 저장 버튼 복원
@@ -724,12 +793,15 @@ function connectWebSocket() {
                 }
                 break;
             case 'note_updated':
-                // 노트 위치 업데이트
-                updateNotePosition(data.noteId, data.x, data.y);
+                // 노트 위치 업데이트 - 즉시 반영
+                const updateLatency = receiveTimestamp - (data.timestamp || 0);
+                console.log(`🔄 노트 위치 업데이트: ${data.noteId} (지연: ${updateLatency}ms)`);
+                updateNotePositionImmediate(data.noteId, data.x, data.y, data.clientId);
                 break;
             case 'notes_load':
             case 'sync_response':
                 // 기존 노트들 로드 또는 동기화 응답
+                console.log(`📋 노트 동기화: ${data.notes.length}개`);
                 handleNotesSync(data.notes);
                 break;
             case 'user_joined':
@@ -742,13 +814,16 @@ function connectWebSocket() {
                 break;
             case 'auth_success':
                 // 인증 성공 후 노트 로드 요청
+                console.log('✅ 인증 성공');
                 ws.send(JSON.stringify({
                     type: 'load_notes'
                 }));
                 break;
             case 'pong':
                 // 하트비트 응답
-                console.log('Heartbeat: 연결 유지됨');
+                const heartbeatLatency = receiveTimestamp - (data.timestamp || 0);
+                console.log(`💓 하트비트 응답: ${heartbeatLatency}ms`);
+                updateConnectionStatus('connected');
                 break;
         }
     };
@@ -910,6 +985,55 @@ function updateNotePosition(noteId, x, y) {
     }
 }
 
+// 즉시 전송 함수 (지연시간 모니터링 포함)
+function sendNoteUpdateImmediate(note) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        const timestamp = Date.now();
+        latencyMonitor.lastSent = timestamp;
+        
+        ws.send(JSON.stringify({
+            type: 'update_note',
+            noteId: note.id,
+            x: note.x,
+            y: note.y,
+            timestamp: timestamp,
+            clientId: 'client_' + currentUser.id
+        }));
+        
+        // 지연시간 디버깅
+        console.log(`📤 노트 업데이트 전송: ${note.id} (${note.x}, ${note.y}) at ${timestamp}`);
+    }
+}
+
+// 즉시 위치 업데이트 함수
+function updateNotePositionImmediate(noteId, x, y, clientId) {
+    // 자신이 보낸 업데이트는 무시 (이미 로컬에서 처리됨)
+    if (clientId === 'client_' + currentUser.id) {
+        return;
+    }
+    
+    // 로컬 데이터 업데이트
+    const note = stickyNotes.find(n => n.id === noteId);
+    if (note) {
+        note.x = x;
+        note.y = y;
+    }
+    
+    // DOM 요소 즉시 업데이트
+    const noteElement = canvas.querySelector(`[data-note-id="${noteId}"]`);
+    if (noteElement && (!isDraggingNote || draggedNote.dataset.noteId !== noteId)) {
+        // 즉시 위치 변경 (애니메이션 없음)
+        noteElement.style.transition = 'none';
+        noteElement.style.left = x + 'px';
+        noteElement.style.top = y + 'px';
+        
+        // 다음 프레임에서 transition 복원
+        requestAnimationFrame(() => {
+            noteElement.style.transition = 'all 0.1s ease';
+        });
+    }
+}
+
 // 키보드 단축키
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -982,4 +1106,64 @@ function setupUnifiedCanvas() {
     unifiedCanvas.addEventListener('mousemove', draw);
     unifiedCanvas.addEventListener('mouseup', stopDrawing);
     unifiedCanvas.addEventListener('mouseout', stopDrawing);
+}
+
+// 지연시간 모니터 설정
+function setupLatencyMonitor() {
+    const latencyPanel = document.createElement('div');
+    latencyPanel.id = 'latency-monitor';
+    latencyPanel.innerHTML = `
+        <div class="latency-title">🚀 실시간 성능</div>
+        <div class="latency-item">
+            <span>네트워크 지연:</span>
+            <span id="network-latency">-</span>
+        </div>
+        <div class="latency-item">
+            <span>평균 지연:</span>
+            <span id="average-latency">-</span>
+        </div>
+        <div class="latency-item">
+            <span>전송 횟수:</span>
+            <span id="update-count">0</span>
+        </div>
+        <div class="latency-item">
+            <span>연결 상태:</span>
+            <span id="websocket-status">연결 중...</span>
+        </div>
+    `;
+    document.body.appendChild(latencyPanel);
+    
+    // 실시간 업데이트
+    setInterval(updateLatencyDisplay, 100);
+}
+
+// 지연시간 표시 업데이트
+function updateLatencyDisplay() {
+    const networkLatency = document.getElementById('network-latency');
+    const averageLatency = document.getElementById('average-latency');
+    const updateCount = document.getElementById('update-count');
+    const wsStatus = document.getElementById('websocket-status');
+    
+    if (networkLatency && latencyMonitor.samples.length > 0) {
+        const latest = latencyMonitor.samples[latencyMonitor.samples.length - 1];
+        networkLatency.textContent = `${latest}ms`;
+        networkLatency.className = latest < 50 ? 'good' : latest < 100 ? 'ok' : 'bad';
+    }
+    
+    if (averageLatency) {
+        averageLatency.textContent = `${Math.round(latencyMonitor.averageLatency)}ms`;
+        averageLatency.className = latencyMonitor.averageLatency < 50 ? 'good' : 
+                                   latencyMonitor.averageLatency < 100 ? 'ok' : 'bad';
+    }
+    
+    if (updateCount) {
+        updateCount.textContent = latencyMonitor.samples.length;
+    }
+    
+    if (wsStatus) {
+        wsStatus.textContent = ws ? 
+            (ws.readyState === WebSocket.OPEN ? '✅ 연결됨' : 
+             ws.readyState === WebSocket.CONNECTING ? '🟡 연결 중...' : '❌ 끊김') : 
+            '❌ 없음';
+    }
 } 
